@@ -1,0 +1,236 @@
+#!/bin/sh
+# ==============================================================================
+# Script: pygen
+# Descrio: Script de automao para pygen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do PyGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "pygen: %s\n" "$1"
+}
+
+error() {
+    printf "pygen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v python3 >/dev/null 2>&1; then
+        log "Validando '$val_file' com python3..."
+        if python3 -m py_compile "$val_file"; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+            # Limpa arquivo de cache gerado pelo py_compile
+            rm -rf __pycache__
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+PyGen v$VERSION – Gerador de Python Scripts (via Shell)
+
+Uso:
+  pygen <comando> [opções]
+
+Comandos:
+  init <arquivo.py>        Cria um novo script Python com layout base.
+  add <arquivo.py> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  logging    Configuração de log padrão.
+  argparse   Esqueleto para parsing de argumentos (CLI).
+  temp       Exemplo de uso de tempfile.
+  pathlib    Uso moderno de caminhos (Path).
+  requests   Requisição HTTP básica (usando urllib stdlib).
+
+Exemplo:
+  pygen init meu_script.py
+  pygen add meu_script.py logging
+EOF
+}
+
+# --- Templates de Módulos Python ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.py}")
+# Descrição: [Script Shell que executa código Python]
+# Gerado por: PyGen (Shell Wrapper para Python)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+# O código abaixo permite que este arquivo seja executado tanto por /bin/sh
+# quanto pelo interpretador python3.
+""":"
+exec python3 "\$0" "\$@"
+"""
+
+# --- Início do Código Python ---
+import sys
+import os
+
+# --- Variáveis Globais / Constantes ---
+PROGNAME = os.path.basename(sys.argv[0])
+
+# --- Funções / Classes ---
+
+def main():
+    """Ponto de entrada principal."""
+    print(f"[{PROGNAME}] Iniciando execução via Python (embrulhado em Shell)...")
+
+# --- Execução Principal ---
+if __name__ == "__main__":
+    main()
+EOF
+}
+
+get_mod_logging() {
+    cat <<EOF
+
+# --- Módulo Logging ---
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(levelname)s] [%(name)s] %(message)s"
+)
+logger = logging.getLogger(PROGNAME)
+EOF
+}
+
+get_mod_argparse() {
+    cat <<EOF
+
+# --- Módulo Argparse ---
+import argparse
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Descrição do Script")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Ativar modo detalhado")
+    return parser.parse_args()
+EOF
+}
+
+get_mod_temp() {
+    cat <<EOF
+
+# --- Módulo Tempfile ---
+import tempfile
+# Exemplo: with tempfile.NamedTemporaryFile() as tmp:
+EOF
+}
+
+get_mod_pathlib() {
+    cat <<EOF
+
+# --- Módulo Pathlib ---
+from pathlib import Path
+# Exemplo: script_path = Path(__file__).resolve()
+EOF
+}
+
+get_mod_requests() {
+    cat <<EOF
+
+# --- Módulo Requests (Urllib Stdlib) ---
+import urllib.request
+import json
+# Exemplo: with urllib.request.urlopen("https://api.github.com") as res:
+#     data = json.load(res)
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'pygen init' primeiro."
+
+    case "$mod" in
+        logging)  code=$(get_mod_logging)  ; anchor="# --- Variáveis Globais / Constantes ---" ;;
+        argparse) code=$(get_mod_argparse) ; anchor="# --- Funções / Classes ---" ;;
+        temp)     code=$(get_mod_temp)     ; anchor="# --- Imports ---" ;;
+        pathlib)  code=$(get_mod_pathlib)  ; anchor="# --- Imports ---" ;;
+        requests) code=$(get_mod_requests)  ; anchor="# --- Imports ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: coloca na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "$anchor" ]; then
+            # Se for seção de globais, garante que a definição da PROGNAME venha antes do logging
+            if [ "$anchor" = "# --- Variáveis Globais / Constantes ---" ]; then
+                # Lê a próxima linha que deve ser a PROGNAME
+                IFS= read -r next_line
+                printf "%s\n" "$next_line" >> "$tmp_edit"
+                printf "%s\n" "$code" >> "$tmp_edit"
+            else
+                printf "%s\n" "$code" >> "$tmp_edit"
+            fi
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no PyGen:\n"
+    printf "  - logging  : Configuração de log padrão\n"
+    printf "  - argparse : Parsing de argumentos CLI\n"
+    printf "  - temp     : Gestão de arquivos temporários\n"
+    printf "  - pathlib  : Manipulação de caminhos Path\n"
+    printf "  - requests : HTTP via urllib (standard lib)\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

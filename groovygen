@@ -1,0 +1,261 @@
+#!/bin/sh
+# ==============================================================================
+# Script: groovygen
+# Descrio: Script de automao para groovygen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do GroovyGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "groovygen: %s
+" "$1"
+}
+
+error() {
+    printf "groovygen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v groovy >/dev/null 2>&1; then
+        log "Validando '$val_file' com groovy -c..."
+        # groovy -c checa a sintaxe do script Groovy
+        if groovy -c "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe Groovy."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+GroovyGen v$VERSION – Gerador de Groovy Scripts (via Shell Wrapper)
+
+Uso:
+  groovygen <comando> [opções]
+
+Comandos:
+  init <arquivo.groovy.sh>        Cria um novo script Groovy com wrapper shell.
+  add <arquivo.groovy.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                           Lista os módulos disponíveis.
+  help                           Mostra esta ajuda.
+
+Módulos disponíveis:
+  main    Estrutura básica com método main.
+  println Procedimento básico para exibir saída.
+  args    Acesso a argumentos da linha de comando (args array).
+  file    Exemplo de uso de classes Java (java.io.File).
+  json    Manipulação de JSON (groovy.json.JsonBuilder/JsonSlurper).
+
+Exemplo:
+  groovygen init meu_script.groovy.sh
+  groovygen add meu_script.groovy.sh main
+EOF
+}
+
+# --- Templates de Módulos Groovy ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-script.groovy.sh}")
+# Descrição: [Script Shell que executa código Groovy]
+# Gerado por: GroovyGen (Shell Wrapper para Groovy)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+GROOVY_EXEC="\$(command -v groovy)"
+if [ -z "\$GROOVY_EXEC" ]; then
+    echo "Erro: Interpretador Groovy não encontrado. Instale o Groovy." >&2
+    exit 1
+fi
+
+# Executa o código Groovy embarcado usando um heredoc
+exec "\$GROOVY_EXEC" - "$@" <<'EOF_GROOVY_CODE'
+// --- Início do Código Groovy ---
+
+// --- Imports ---
+import java.lang.System
+
+// --- Constantes Globais ---
+final String PROGNAME = new File(System.argv[0]).getName();
+
+// --- Funções / Métodos ---
+
+def logMsg(msg) {
+    System.out.println(String.format("[%s] %s", PROGNAME, msg));
+}
+
+def main(args) {
+    logMsg("Iniciando execução via Groovy...");
+    // Adicione sua lógica aqui
+}
+
+// --- Execução Principal ---
+if (System.getProperty("java.vm.name") != null && System.getProperty("java.vm.name").contains("Groovy")) {
+    // Execução direta quando o script é chamado pelo Groovy
+    // Os argumentos são passados via process.argv em Node, mas em Groovy é args array
+    def cliArgs = args ?: [] // Use args array if provided, else empty
+    main(cliArgs)
+} else {
+    // Se chamado pelo Shell sem 'exec', podemos executar o main
+    // Este bloco pode precisar de ajuste dependendo do wrapper shell exato
+    // Para este wrapper, o 'exec' garante que o groovy pegue os args diretamente.
+    // Se o script fosse executado diretamente pelo shell e não pelo exec,
+    // teríamos que lidar com argv aqui.
+    // No contexto do 'exec', o node/php/perl/etc pegará os args.
+}
+
+// Para garantir que o script principal seja chamado quando executado diretamente
+if (this.class.protectionDomain.codeSource.location == null) { // Heuristic for script execution context
+    main(args)
+}
+
+EOF_GROOVY_CODE
+EOF
+}
+
+get_mod_println() {
+    cat <<EOF
+
+// --- Módulo Println ---
+// Procedimento básico para exibir mensagens.
+// Exemplo: logMsg("Olá do Groovy!")
+EOF
+}
+
+get_mod_args() {
+    cat <<EOF
+
+// --- Módulo Args ---
+// Acesso aos argumentos da linha de comando via 'args' array
+// Exemplo:
+// if (args.length > 0) {
+//     logMsg("Primeiro argumento: " + args[0]);
+// }
+EOF
+}
+
+get_mod_file() {
+    cat <<EOF
+
+// --- Módulo File ---
+// Exemplo de uso da classe java.io.File
+// def inputFile = new File("input.txt")
+// if (inputFile.exists()) {
+//     def content = inputFile.getText()
+//     logMsg("Conteúdo lido: " + content.take(50) + "...")
+// } else {
+//     logMsg("Arquivo input.txt não encontrado.")
+// }
+EOF
+}
+
+get_mod_json() {
+    cat <<EOF
+
+// --- Módulo JSON ---
+// Requer groovy-json (geralmente incluído no Groovy)
+// import groovy.json.JsonBuilder
+// import groovy.json.JsonSlurper
+
+// Exemplo:
+// def data = [hello: "world", number: 123]
+// def jsonBuilder = new JsonBuilder(data)
+// println jsonBuilder.toPrettyString()
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'groovygen init' primeiro."
+
+    case "$mod" in
+        main)    code=$(get_mod_main)    ; anchor="// --- Início do Código Groovy ---" ;;
+        println) code=$(get_mod_println) ; anchor="// --- Início do Código Groovy ---" ;;
+        args)    code=$(get_mod_args)    ; anchor="// --- Início do Código Groovy ---" ;;
+        file)    code=$(get_mod_file)    ; anchor="// --- Início do Código Groovy ---" ;;
+        json)    code=$(get_mod_json)    ; anchor="// --- Início do Código Groovy ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo após a âncora "// --- Início do Código Groovy ---"
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no GroovyGen:
+"
+    printf "  - main     : Estrutura básica com método main
+"
+    printf "  - println  : Exibir mensagens básicas
+"
+    printf "  - args     : Acesso a argumentos da linha de comando
+"
+    printf "  - file     : Operações básicas de arquivo
+"
+    printf "  - json     : Manipulação de JSON
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

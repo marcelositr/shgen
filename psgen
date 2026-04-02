@@ -1,0 +1,258 @@
+#!/bin/sh
+# ==============================================================================
+# Script: psgen
+# Descrio: Script de automao para psgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+IFS='
+'
+
+VERSION="1.0.0"
+
+log() {
+    printf "psgen: %s\n" "$1"
+}
+
+error() {
+    printf "psgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    file="$1"
+
+    if command -v pwsh >/dev/null 2>&1; then
+        PS="pwsh"
+    elif command -v powershell >/dev/null 2>&1; then
+        PS="powershell"
+    else
+        return
+    fi
+
+    log "Validando $file com $PS..."
+
+    if "$PS" -NoProfile -Syntax -File "$file" >/dev/null 2>&1; then
+        log "Sintaxe OK"
+    else
+        log "Aviso: possível erro PowerShell"
+    fi
+}
+
+usage() {
+cat <<EOF
+PsGen v$VERSION – Gerador de scripts PowerShell
+
+Uso:
+  psgen init arquivo.ps1
+  psgen add arquivo.ps1 modulo
+  psgen list
+  psgen help
+
+Modulos:
+  write-host
+  args
+  get-date
+  invoke-webrequest
+EOF
+}
+
+get_base() {
+cat <<'EOF'
+#!/usr/bin/env pwsh
+# ==============================================================================
+# Script PowerShell gerado por PsGen
+# ==============================================================================
+
+param(
+    [string[]]$Arguments
+)
+
+Write-Host "Script iniciado"
+
+# --- Início do Código PowerShell ---
+
+# --- Bloco principal ---
+
+# --- Fim do Código PowerShell ---
+
+Write-Host "Script finalizado"
+EOF
+}
+
+get_mod_write_host() {
+cat <<'EOF'
+
+# --- Write-Host ---
+Write-Host "Olá do PowerShell"
+EOF
+}
+
+get_mod_args() {
+cat <<'EOF'
+
+# --- Args ---
+if ($args.Count -gt 0) {
+    Write-Host "Argumento:" $args[0]
+}
+EOF
+}
+
+get_mod_get_date() {
+cat <<'EOF'
+
+# --- Get-Date ---
+$current = Get-Date
+Write-Host $current
+EOF
+}
+
+get_mod_invoke_webrequest() {
+cat <<'EOF'
+
+# --- Invoke-WebRequest ---
+try {
+    $r = Invoke-WebRequest https://httpbin.org/get
+    Write-Host $r.StatusCode
+}
+catch {
+    Write-Host "Erro HTTP"
+}
+EOF
+}
+
+cmd_init() {
+
+[ $# -eq 1 ] || usage
+
+file="$1"
+
+[ -f "$file" ] && error "arquivo existe"
+
+get_base > "$file"
+
+chmod +x "$file"
+
+log "criado $file"
+
+validate_script "$file"
+
+}
+
+cmd_add() {
+
+[ $# -eq 2 ] || usage
+
+file="$1"
+mod="$2"
+
+[ -f "$file" ] || error "arquivo não existe"
+
+case "$mod" in
+
+write-host)
+code=$(get_mod_write_host)
+;;
+
+args)
+code=$(get_mod_args)
+;;
+
+get-date)
+code=$(get_mod_get_date)
+;;
+
+invoke-webrequest)
+code=$(get_mod_invoke_webrequest)
+;;
+
+*)
+error "modulo invalido"
+;;
+
+esac
+
+tmp=$(mktemp)
+
+trap 'rm -f "$tmp"' EXIT
+
+inserted=false
+
+while IFS= read -r line
+do
+
+printf "%s\n" "$line" >> "$tmp"
+
+case "$line" in
+*"--- Bloco principal ---"* )
+
+if [ "$inserted" = false ]
+then
+
+printf "%s\n" "$code" >> "$tmp"
+
+inserted=true
+
+fi
+
+;;
+
+esac
+
+done < "$file"
+
+mv "$tmp" "$file"
+
+chmod +x "$file"
+
+trap - EXIT
+
+log "modulo $mod adicionado"
+
+validate_script "$file"
+
+}
+
+cmd_list() {
+
+printf "Modulos:\n"
+
+printf " write-host\n"
+printf " args\n"
+printf " get-date\n"
+printf " invoke-webrequest\n"
+
+}
+
+[ $# -lt 1 ] && usage && exit 0
+
+cmd="$1"
+
+shift
+
+case "$cmd" in
+
+init)
+cmd_init "$@"
+;;
+
+add)
+cmd_add "$@"
+;;
+
+list)
+cmd_list
+;;
+
+help)
+usage
+;;
+
+*)
+error "comando invalido"
+;;
+
+esac

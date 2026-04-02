@@ -1,0 +1,232 @@
+#!/bin/sh
+# ==============================================================================
+# Script: elgen
+# Descrio: Script de automao para elgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do ElGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "elgen: %s
+" "$1"
+}
+
+error() {
+    printf "elgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v emacs >/dev/null 2>&1; then
+        log "Validando '$val_file' com emacs --batch..."
+        # Executa emacs em modo batch para checagem de sintaxe e carregamento
+        # Usamos '-l' para carregar o script e '-e' para rodar um comando de validação
+        if emacs --batch -l "$val_file" -e '(package-initialize)' >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe Emacs Lisp."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+ElGen v$VERSION – Gerador de Emacs Lisp Scripts (via Shell Wrapper)
+
+Uso:
+  elgen <comando> [opções]
+
+Comandos:
+  init <arquivo.el.sh>        Cria um novo script Emacs Lisp com wrapper shell.
+  add <arquivo.el.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                         Lista os módulos disponíveis.
+  help                         Mostra esta ajuda.
+
+Módulos disponíveis:
+  message  Procedimento básico para exibir saída.
+  args     Acesso a argumentos da linha de comando (argv).
+  proc     Definição de um procedimento (função).
+
+Exemplo:
+  elgen init meu_script.el.sh
+  elgen add meu_script.el.sh message
+EOF
+}
+
+# --- Templates de Módulos Emacs Lisp ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-script.el.sh}")
+# Descrição: [Script Shell que executa código Emacs Lisp]
+# Gerado por: ElGen (Shell Wrapper para Emacs Lisp)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+EMACS_EXEC="\$(command -v emacs)"
+if [ -z "\$EMACS_EXEC" ]; then
+    echo "Erro: Interpretador Emacs não encontrado. Instale o Emacs." >&2
+    exit 1
+fi
+
+# Executa o código Emacs Lisp embarcado usando um heredoc
+# O Emacs interpretará o código após a linha 'exec ...'
+# A linha ';; -*- Emacs-Lisp -*-' é importante para o Emacs reconhecer o tipo de arquivo.
+exec "\$EMACS_EXEC" --batch -l "\$0" "\$@" <<'EOF_EMACS_LISP_CODE'
+;; -*- Emacs-Lisp -*-
+;; ============================================================================
+;; Script: \$(basename "\${file:-script.el.sh}")
+;; Descrição: [Script Emacs Lisp executado via wrapper Shell]
+;; Gerado por: ElGen
+;; Data: \$(date '+%Y-%m-%d %H:%M')
+;; ============================================================================
+
+;; --- Início do Código Emacs Lisp ---
+
+;; --- Constantes Globais ---
+(defconst PROGNAME (car command-line))
+
+;; --- Procedimentos / Funções ---
+
+(defun logMsg (msg)
+  (message "[%s] %s" PROGNAME msg))
+
+(defun main (args)
+  (logMsg "Iniciando execução via Emacs Lisp...")
+  ;; Adicione sua lógica aqui
+)
+
+;; --- Execução Principal ---
+;; Verifica se o script está sendo executado diretamente (não carregado por outro script)
+;; Isso é feito comparando o nome do comando principal com o script carregado.
+(if (equal? (car argv) (cadr command-line)) ; Para pegar o nome do script corretamente
+    (main (cddr argv)) ; Passa os argumentos reais para main
+    (main argv))     ; Caso contrário, passa todos os argumentos
+EOF_EMACS_LISP_CODE
+EOF
+}
+
+get_mod_message() {
+    cat <<EOF
+
+;; --- Módulo Message ---
+;; Procedimento básico para exibir mensagens.
+;; Exemplo: (logMsg "Olá do Emacs Lisp!")
+EOF
+}
+
+get_mod_args() {
+    cat <<EOF
+
+;; --- Módulo Args ---
+;; Acesso aos argumentos da linha de comando via 'command-line'
+;; Exemplo:
+;; (setq args (cdr command-line))
+;; (if (listp args)
+;;     (logMsg (concat "Primeiro argumento: " (car args))))
+EOF
+}
+
+get_mod_proc() {
+    cat <<EOF
+
+;; --- Módulo Procedimento ---
+(defun example-proc (name)
+  (format "Hello, %s!" name))
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'elgen init' primeiro."
+
+    case "$mod" in
+        message) code=$(get_mod_message) ; anchor=";; --- Início do Código Emacs Lisp ---" ;;
+        args)    code=$(get_mod_args)    ; anchor=";; --- Início do Código Emacs Lisp ---" ;;
+        proc)    code=$(get_mod_proc)    ; anchor=";; --- Início do Código Emacs Lisp ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo após a âncora "// --- Início do Código Emacs Lisp ---"
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        # Usamos a âncora que é um comentário em Elisp
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    # Caso a âncora não seja encontrada explicitamente para a inserção, append ao final
+    if ! $inserted; then
+        printf "%s
+" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no ElGen:
+"
+    printf "  - message  : Exibir mensagens básicas
+"
+    printf "  - args     : Acesso a argumentos da linha de comando
+"
+    printf "  - proc     : Definição de procedimentos (funções)
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

@@ -1,0 +1,229 @@
+#!/bin/sh
+# ==============================================================================
+# Script: cmakegen
+# Descrio: Script de automao para cmakegen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do CMakeGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "cmakegen: %s
+" "$1"
+}
+
+error() {
+    printf "cmakegen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v cmake >/dev/null 2>&1; then
+        log "Validando '$val_file' com cmake --check-syntax..."
+        # Tenta usar cmake --check-syntax se disponível, caso contrário, validação básica.
+        if cmake --check-syntax "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            # Tentar uma validação mais básica se --check-syntax falhar ou não for suportado
+            if cmake -L "$val_file" >/dev/null 2>&1; then
+                log "Validação básica concluída (com -L): Sintaxe parece correta."
+            else
+                log "Aviso: O script '$val_file' pode conter erros de sintaxe CMake."
+            fi
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+CMakeGen v$VERSION – Gerador de CMakeLists.txt (via Shell Wrapper)
+
+Uso:
+  cmakegen <comando> [opções]
+
+Comandos:
+  init <arquivo.cmake.sh>        Cria um novo script CMake com wrapper shell.
+  add <arquivo.cmake.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                         Lista os módulos disponíveis.
+  help                         Mostra esta ajuda.
+
+Módulos disponíveis:
+  project    Define o nome do projeto e a versão mínima do CMake.
+  executable Define um alvo executável.
+  find_pkg   Busca por pacotes externos (ex: find_package(OpenCV REQUIRED)).
+
+Exemplo:
+  cmakegen init meu_projeto.cmake.sh
+  cmakegen add meu_projeto.cmake.sh project
+EOF
+}
+
+# --- Templates de Módulos CMake ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-CMakeLists.txt.sh}")
+# Descrição: [Script Shell que executa CMake]
+# Gerado por: CMakeGen (Shell Wrapper para CMake)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+CMAKE_EXEC="\$(command -v cmake)"
+if [ -z "\$CMAKE_EXEC" ]; then
+    echo "Erro: Utilitário 'cmake' não encontrado. Instale o CMake." >&2
+    exit 1
+fi
+
+# Executa o código CMake embarcado usando um heredoc
+# O '-S -' instrui o cmake a ler o script do stdin.
+exec "\$CMAKE_EXEC" -S - --check-build-system --check-source=tumor -DCMAKE_NO_DEFAULT_PATH=1 -P - "$@" <<'EOF_CMAKE_CODE'
+# --- Início do Conteúdo CMake ---
+
+# Define a versão mínima do CMake e o nome do projeto
+# set(CMAKE_MINIMUM_REQUIRED VERSION 3.10)
+# project(MyProject VERSION 1.0)
+
+# --- Configurações Gerais ---
+
+# Define a versão mínima do CMake e o nome do projeto
+# Exemplo:
+# cmake_minimum_required(VERSION 3.10)
+# project(MyProject VERSION 1.0)
+
+# --- Alvos Executáveis ---
+# add_executable(my_app main.cpp)
+
+# --- Configuração de Compilação ---
+# set(CMAKE_CXX_STANDARD 17)
+# target_compile_options(my_app PRIVATE -Wall)
+
+# --- Fim do Conteúdo CMake ---
+EOF_CMAKE_CODE
+EOF
+}
+
+get_mod_project() {
+    cat <<EOF
+
+# --- Módulo Project ---
+# Define o nome do projeto e versões.
+# Exemplo:
+# cmake_minimum_required(VERSION 3.10)
+# project(MyProject VERSION 1.0)
+EOF
+}
+
+get_mod_executable() {
+    cat <<EOF
+
+# --- Módulo Executable ---
+# Define um alvo executável.
+# Formato: add_executable(target_name source1 source2 ...)
+# Exemplo:
+# add_executable(my_app main.cpp utils.cpp)
+EOF
+}
+
+get_mod_find_pkg() {
+    cat <<EOF
+
+# --- Módulo Find Package ---
+# Busca por pacotes externos e torna suas variáveis disponíveis.
+# Exemplo:
+# find_package(OpenCV REQUIRED)
+# target_link_libraries(my_app PRIVATE opencv_core)
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'cmakegen init' primeiro."
+
+    case "$mod" in
+        project)    code=$(get_mod_project)    ; anchor="# --- Configurações Gerais ---" ;;
+        executable) code=$(get_mod_executable) ; anchor="# --- Alvos Executáveis ---" ;;
+        find_pkg)   code=$(get_mod_find_pkg)   ; anchor="# --- Busca por Pacotes Externos ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    # Caso a âncora não seja encontrada explicitamente para a inserção, append ao final
+    if ! $inserted; then
+        printf "%s
+" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no CMakeGen:
+"
+    printf "  - project    : Define nome e versão do projeto
+"
+    printf "  - executable : Define um alvo executável
+"
+    printf "  - find_pkg   : Busca por pacotes externos
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

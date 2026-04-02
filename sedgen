@@ -1,0 +1,234 @@
+#!/bin/sh
+# ==============================================================================
+# Script: sedgen
+# Descrio: Script de automao para sedgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do SedGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "sedgen: %s
+" "$1"
+}
+
+error() {
+    printf "sedgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v sed >/dev/null 2>&1; then
+        log "Validando '$val_file' com sed..."
+        # Executa o script sed com uma entrada vazia para checar a sintaxe básica.
+        # Comandos complexos podem não ser pegos aqui, mas erros de sintaxe básica sim.
+        if sed -f "$val_file" <<< "" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' parece correta."
+        else
+            log "Aviso: O script '$val_file' pode conter erros de sintaxe sed."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+SedGen v$VERSION – Gerador de SED Scripts (via Shell Wrapper)
+
+Uso:
+  sedgen <comando> [opções]
+
+Comandos:
+  init <arquivo.sed.sh>        Cria um novo script SED com wrapper shell.
+  add <arquivo.sed.sh> <mod>   Adiciona um comando SED funcional ao script.
+  list                         Lista os módulos disponíveis.
+  help                         Mostra esta ajuda.
+
+Módulos disponíveis:
+  replace  Substituir texto (s/old/new/).
+  delete   Remover linhas por padrão (/<pattern>/d).
+  insert   Inserir texto antes de um padrão (a/text).
+  append   Adicionar texto ao final do arquivo (sem padrão específico, ou com $).
+
+Exemplo:
+  sedgen init meu_script.sed.sh
+  sedgen add meu_script.sed.sh replace
+EOF
+}
+
+# --- Templates de Módulos SED ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-script.sed.sh}")
+# Descrição: [Script Shell que executa comandos SED]
+# Gerado por: SedGen (Shell Wrapper para SED)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+SED_EXEC="\$(command -v sed)"
+if [ -z "\$SED_EXEC" ]; then
+    echo "Erro: Utilitário SED não encontrado. Instale o sed." >&2
+    exit 1
+fi
+
+# Executa os comandos SED embarcados usando um heredoc
+exec "\$SED_EXEC" -f - "$@" <<'EOF_SED_CODE'
+# --- Início dos Comandos SED ---
+# Use os comandos SED aqui.
+# Exemplo: s/foo/bar/g
+
+# Comando para adicionar ao final do arquivo
+# A âncora '$' é usada para garantir que seja adicionado ao fim.
+EOF_SED_CODE
+EOF
+}
+
+get_mod_replace() {
+    cat <<EOF
+
+# --- Módulo Replace ---
+# Substitui todas as ocorrências de 'old_text' por 'new_text'.
+# Use s/old_text/new_text/g
+# Exemplo: s/palavra_velha/palavra_nova/g
+#
+# Argumentos:
+#   old_pattern: O padrão a ser procurado.
+#   new_text: O texto para substituir.
+#
+# Exemplo de uso no script gerado (para substituir 'foo' por 'bar'):
+# s/foo/bar/g
+EOF
+}
+
+get_mod_delete() {
+    cat <<EOF
+
+# --- Módulo Delete ---
+# Remove linhas que correspondem a um padrão.
+# Exemplo: /pattern_to_delete/d
+#
+# Para remover linhas em branco: /^$/d
+# Para remover linhas que começam com '#': /^#/d
+EOF
+}
+
+get_mod_insert() {
+    cat <<EOF
+
+# --- Módulo Insert ---
+# Insere texto antes de uma linha que corresponde a um padrão.
+# Formato: /pattern/i
+# text_to_insert
+#
+# Exemplo: Inserir 'texto_novo' antes de uma linha com 'palavra_chave':
+# /palavra_chave/i
+# texto_novo
+EOF
+}
+
+get_mod_append() {
+    cat <<EOF
+
+# --- Módulo Append ---
+# Adiciona texto ao final de cada linha ou ao final do arquivo.
+# Para adicionar ao final de cada linha: s/$/ new_text/
+# Para adicionar ao final do arquivo (sem padrão específico): $ a
+# text_to_append
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'sedgen init' primeiro."
+
+    case "$mod" in
+        replace) code=$(get_mod_replace) ; anchor="# --- Início dos Comandos SED ---" ;;
+        delete)  code=$(get_mod_delete)  ; anchor="# --- Início dos Comandos SED ---" ;;
+        insert)  code=$(get_mod_insert)  ; anchor="# --- Início dos Comandos SED ---" ;;
+        append)  code=$(get_mod_append)  ; anchor="\$" ;; # Âncora para o final do arquivo
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    # Caso a âncora não seja encontrada explicitamente para a inserção, append ao final
+    if ! $inserted; then
+        printf "%s
+" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no SedGen:
+"
+    printf "  - replace  : Substituir texto (s/old/new/g)
+"
+    printf "  - delete   : Remover linhas por padrão (/<pattern>/d)
+"
+    printf "  - insert   : Inserir texto antes de um padrão (a/text)
+"
+    printf "  - append   : Adicionar texto ao final do arquivo ($ a	ext)
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

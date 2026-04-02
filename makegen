@@ -1,0 +1,223 @@
+#!/bin/sh
+# ==============================================================================
+# Script: makegen
+# Descrio: Script de automao para makegen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+
+set -eu
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do MakeGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "makegen: %s
+" "$1"
+}
+
+error() {
+    printf "makegen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v make >/dev/null 2>&1; then
+        log "Validando '$val_file' com make -f ..."
+        # Executa make com o script como entrada para checar a sintaxe básica.
+        if make -f "$val_file" --dry-run >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' parece correta."
+        else
+            log "Aviso: O script '$val_file' pode conter erros de sintaxe Makefile."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+MakeGen v$VERSION – Gerador de Makefiles (via Shell Wrapper)
+
+Uso:
+  makegen <comando> [opções]
+
+Comandos:
+  init <arquivo.mk.sh>        Cria um novo Makefile com wrapper shell.
+  add <arquivo.mk.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                        Lista os módulos disponíveis.
+  help                        Mostra esta ajuda.
+
+Módulos disponíveis:
+  target    Define um alvo (ex: all, clean).
+  variable  Define uma variável.
+  phony     Declara um alvo como 'phony'.
+
+Exemplo:
+  makegen init meu_projeto.mk.sh
+  makegen add meu_projeto.mk.sh target
+EOF
+}
+
+# --- Templates de Módulos Makefile ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-Makefile}")
+# Descrição: [Script Shell que executa um Makefile]
+# Gerado por: MakeGen (Shell Wrapper para Make)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+MAKE_EXEC="\$(command -v make)"
+if [ -z "\$MAKE_EXEC" ]; then
+    echo "Erro: Utilitário 'make' não encontrado. Instale o 'make'." >&2
+    exit 1
+fi
+
+# Executa o conteúdo do Makefile embarcado usando um heredoc
+exec "\$MAKE_EXEC" -f - "$@" <<'EOF_MAKE_CODE'
+# --- Início do Conteúdo Makefile ---
+
+# Padrão: .PHONY
+.PHONY: all clean
+
+# Alvo Padrão
+all:
+	@echo "Makefile executado com sucesso!"
+
+# --- Variáveis ---
+# Exemplo: CC = gcc
+
+# --- Comandos/Regras ---
+clean:
+	@echo "Limpando arquivos..."
+	# Adicione comandos de limpeza aqui
+
+# --- Fim dos Comandos ---
+EOF_MAKE_CODE
+EOF
+}
+
+get_mod_target() {
+    cat <<EOF
+
+# --- Módulo Target ---
+# Define um alvo com suas dependências e comandos.
+# Formato: target: dependencies
+#          	command1
+#          	command2
+# Exemplo:
+# build: src/*.c
+# 	\$(CC) \$^ -o \$@
+EOF
+}
+
+get_mod_variable() {
+    cat <<EOF
+
+# --- Módulo Variable ---
+# Define uma variável.
+# Formato: VARIABLE = value
+# Exemplo:
+# CC = gcc
+# CFLAGS = -Wall -O2
+EOF
+}
+
+get_mod_phony() {
+    cat <<EOF
+
+# --- Módulo Phony Target ---
+# Declara um alvo como phony (não corresponde a um arquivo real).
+# Exemplo:
+# .PHONY: install
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'makegen init' primeiro."
+
+    case "$mod" in
+        target)   code=$(get_mod_target)   ; anchor="# --- Comandos/Regras ---" ;;
+        variable) code=$(get_mod_variable) ; anchor="# --- Variáveis ---" ;;
+        phony)    code=$(get_mod_phony)    ; anchor="# --- Padrão: .PHONY ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    # Caso a âncora não seja encontrada explicitamente para a inserção, append ao final
+    if ! $inserted; then
+        printf "%s
+" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no MakeGen:
+"
+    printf "  - target    : Define um alvo (ex: all, clean)
+"
+    printf "  - variable  : Define uma variável (ex: CC = gcc)
+"
+    printf "  - phony     : Declara um alvo como phony
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

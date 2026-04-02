@@ -1,0 +1,243 @@
+#!/bin/sh
+# ==============================================================================
+# Script: tfgen
+# Descrio: Script de automao para tfgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do TfGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "tfgen: %s
+" "$1"
+}
+
+error() {
+    printf "tfgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v terraform >/dev/null 2>&1; then
+        log "Validando '$val_file' com terraform..."
+        TEMP_DIR=$(mktemp -d)
+        # Cria um arquivo .tf temporário para validação
+        cat "$val_file" > "$TEMP_DIR/main.tf"
+        
+        cd "$TEMP_DIR" || exit 1 # Entra no diretório temporário
+        
+        if terraform init -input=false -no-color >/dev/null 2>&1; then
+            if terraform validate >/dev/null 2>&1; then
+                log "Validação concluída: '$val_file' parece ter sintaxe Terraform válida."
+            else
+                log "Aviso: Terraform validate falhou para '$val_file'."
+            fi
+        else
+            log "Aviso: Terraform init falhou para '$val_file'. Pode haver problemas de configuração ou rede."
+        fi
+        cd - >/dev/null # Volta ao diretório anterior
+        rm -rf "$TEMP_DIR" # Limpa o diretório temporário
+    else
+        log "Aviso: Utilitário 'terraform' não encontrado. Não foi possível validar a configuração."
+    fi
+}
+
+usage() {
+    cat <<EOF
+TfGen v$VERSION – Gerador de Terraform/HCL Scripts (via Shell Wrapper)
+
+Uso:
+  tfgen <comando> [opções]
+
+Comandos:
+  init <arquivo.tf.sh>        Cria um novo script Terraform com wrapper shell.
+  add <arquivo.tf.sh> <mod>   Adiciona um recurso ou configuração Terraform.
+  list                         Lista os módulos disponíveis.
+  help                         Mostra esta ajuda.
+
+Módulos disponíveis:
+  provider  Configura um provedor (ex: AWS).
+  resource  Define um recurso Terraform (ex: aws_instance).
+  variable  Define uma variável de entrada.
+
+Exemplo:
+  tfgen init main.tf.sh
+  tfgen add main.tf.sh provider
+EOF
+}
+
+# --- Templates de Módulos Terraform/HCL ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-main.tf.sh}")
+# Descrição: [Script Shell que executa Terraform/HCL]
+# Gerado por: TfGen (Shell Wrapper para Terraform)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+TERRAFORM_EXEC="\$(command -v terraform)"
+if [ -z "\$TERRAFORM_EXEC" ]; then
+    echo "Erro: Utilitário 'terraform' não encontrado. Instale o Terraform." >&2
+    exit 1
+fi
+
+# Executa o código Terraform embarcado usando um heredoc
+# O Shell executa o terraform com o restante do arquivo como script.
+exec "\$TERRAFORM_EXEC" apply -auto-approve - <<'EOF_TF_CODE'
+# --- Início do Código Terraform/HCL ---
+
+# Bloco de provedor padrão (exemplo AWS)
+# provider "aws" {
+#   region = "us-east-1"
+# }
+
+# Recurso de exemplo
+# resource "null_resource" "example" {}
+
+# Variável de exemplo
+# variable "example_variable" {
+#   description = "An example variable"
+#   type        = string
+#   default     = "default_value"
+# }
+
+# --- Fim do Código Terraform ---
+EOF_TF_CODE
+EOF
+}
+
+get_mod_provider() {
+    cat <<EOF
+
+# --- Módulo Provider ---
+# Configura um provedor de nuvem.
+# Exemplo para AWS:
+# provider "aws" {
+#   region = "us-east-1"
+#   # Outras configurações...
+# }
+EOF
+}
+
+get_mod_resource() {
+    cat <<EOF
+
+# --- Módulo Resource ---
+# Define um recurso gerenciado pelo provedor.
+# Formato: resource "provider_resource_type" "resource_name" { ... }
+# Exemplo:
+# resource "null_resource" "example" {
+#   triggers = {
+#     always_run = timestamp()
+#   }
+# }
+EOF
+}
+
+get_mod_variable() {
+    cat <<EOF
+
+# --- Módulo Variable ---
+# Define uma variável de entrada para o Terraform.
+# Exemplo:
+# variable "example_variable" {
+#   description = "An example variable"
+#   type        = string
+#   default     = "default_value"
+# }
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'tfgen init' primeiro."
+
+    case "$mod" in
+        provider)   code=$(get_mod_provider)   ; anchor="# --- Bloco de provedor padrão" ;;
+        resource)   code=$(get_mod_resource)   ; anchor="# --- Recurso de exemplo" ;;
+        variable)   code=$(get_mod_variable)   ; anchor="# --- Variável de exemplo" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    # Caso a âncora não seja encontrada explicitamente para a inserção, append ao final
+    if ! $inserted; then
+        printf "%s
+" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no TfGen:
+"
+    printf "  - provider  : Configura um provedor (ex: AWS)
+"
+    printf "  - resource  : Define um recurso Terraform (ex: null_resource)
+"
+    printf "  - variable  : Define uma variável de entrada
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

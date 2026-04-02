@@ -1,0 +1,248 @@
+#!/bin/sh
+# ==============================================================================
+# Script: luagen
+# Descrio: Script de automao para luagen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do LuaGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "luagen: %s\n" "$1"
+}
+
+error() {
+    printf "luagen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v luac >/dev/null 2>&1; then
+        log "Validando '$val_file' com luac -p..."
+        if luac -p "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe lua."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+LuaGen v$VERSION – Gerador de Lua Scripts (via Shell Wrapper)
+
+Uso:
+  luagen <comando> [opções]
+
+Comandos:
+  init <arquivo.sh>        Cria um novo script Lua com wrapper shell.
+  add <arquivo.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  argparse   Parsing básico de argumentos CLI (tabela arg).
+  file       Utilitários simples para leitura/escrita de arquivos.
+  json       Sugestão de bibliotecas JSON (dkjson/cjson).
+  path       Manipulação básica de caminhos de arquivos.
+  table      Funções utilitárias para tabelas (print_r).
+
+Exemplo:
+  luagen init meu_script.sh
+  luagen add meu_script.sh argparse
+EOF
+}
+
+# --- Templates de Módulos Lua ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.sh}")
+# Descrição: [Script Shell que executa código Lua]
+# Gerado por: LuaGen (Shell Wrapper para Lua)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+--[[
+exec lua "\$0" "\$@"
+]]
+
+-- --- Bibliotecas / Requires ---
+
+-- --- Variáveis Globais / Constantes ---
+local PROGNAME = arg[0]
+
+-- --- Funções Auxiliares ---
+
+local function log_msg(msg)
+    print(string.format("[%s] %s", PROGNAME, msg))
+end
+
+-- --- Lógica Principal ---
+
+local function main(args)
+    log_msg("Iniciando execução via Lua (embrulhado em Shell)...")
+    -- Adicione sua lógica aqui
+end
+
+main(arg)
+EOF
+}
+
+get_mod_argparse() {
+    cat <<EOF
+
+-- --- Módulo Argparse ---
+local options = { verbose = false }
+for i, v in ipairs(arg) do
+    if v == "-v" or v == "--verbose" then
+        options.verbose = true
+    end
+end
+EOF
+}
+
+get_mod_file() {
+    cat <<EOF
+
+-- --- Módulo File Utils ---
+local function read_file(path)
+    local f = assert(io.open(path, "rb"))
+    local content = f:read("*all")
+    f:close()
+    return content
+end
+
+local function write_file(path, content)
+    local f = assert(io.open(path, "wb"))
+    f:write(content)
+    f:close()
+end
+EOF
+}
+
+get_mod_json() {
+    cat <<EOF
+
+-- --- Módulo JSON (Informacional) ---
+-- Nota: Lua não possui JSON na stdlib.
+-- Recomendado: dkjson ou lua-cjson.
+-- Exemplo com dkjson:
+-- local json = require("dkjson")
+-- local str = json.encode({hello = "world"})
+EOF
+}
+
+get_mod_path() {
+    cat <<EOF
+
+-- --- Módulo Path Utils ---
+local function get_extension(path)
+    return path:match("^.+(%..+)$")
+end
+
+local function get_filename(path)
+    return path:match("^.+/(.+)$") or path
+end
+EOF
+}
+
+get_mod_table() {
+    cat <<EOF
+
+-- --- Módulo Table Utils ---
+local function print_table(t, indent)
+    indent = indent or ""
+    for k, v in pairs(t) do
+        if type(v) == "table" then
+            print(indent .. tostring(k) .. ":")
+            print_table(v, indent .. "  ")
+        else
+            print(indent .. tostring(k) .. ": " .. tostring(v))
+        end
+    end
+end
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'luagen init' primeiro."
+
+    case "$mod" in
+        argparse) code=$(get_mod_argparse) ; anchor="-- --- Variáveis Globais / Constantes ---" ;;
+        file)     code=$(get_mod_file)     ; anchor="-- --- Funções Auxiliares ---" ;;
+        json)     code=$(get_mod_json)     ; anchor="-- --- Bibliotecas / Requires ---" ;;
+        path)     code=$(get_mod_path)     ; anchor="-- --- Funções Auxiliares ---" ;;
+        table)    code=$(get_mod_table)    ; anchor="-- --- Funções Auxiliares ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: coloca na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "$anchor" ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no LuaGen:\n"
+    printf "  - argparse : Parsing básico de argumentos\n"
+    printf "  - file     : Utilitários de arquivo\n"
+    printf "  - json     : Dicas para JSON\n"
+    printf "  - path     : Utilitários de caminho\n"
+    printf "  - table    : Utilitários para tabelas\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

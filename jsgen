@@ -1,0 +1,253 @@
+#!/bin/sh
+# ==============================================================================
+# Script: jsgen
+# Descrio: Script de automao para jsgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do JsGen
+VERSION="1.0.2"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "jsgen: %s
+" "$1"
+}
+
+error() {
+    printf "jsgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v node >/dev/null 2>&1; then
+        log "Validando '$val_file' com node..."
+        # Executa o script via node para checagem sintática básica.
+        # A validação com node -c pode não ser confiável para heredocs.
+        # Vamos usar a execução direta para validar.
+        if node "$val_file" --validate >/dev/null 2>&1; then
+            log "Validação básica concluída: Script '$val_file' parece executável."
+        else
+            log "Aviso: O script '$val_file' pode conter erros de sintaxe JavaScript/Node.js."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+JsGen v$VERSION – Gerador de Node.js Scripts (via Shell Wrapper)
+
+Uso:
+  jsgen <comando> [opções]
+
+Comandos:
+  init <arquivo.sh>        Cria um novo script Node.js com wrapper shell.
+  add <arquivo.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  fs      Módulo 'fs' para operações de arquivo.
+  path    Módulo 'path' para manipulação de caminhos.
+  http    Módulo 'http' básico (servidor/cliente).
+  process Módulo 'process' (args, env).
+  events  Módulo 'events' (EventEmitter).
+
+Exemplo:
+  jsgen init meu_script.js.sh
+  jsgen add meu_script.js.sh fs
+EOF
+}
+
+# --- Templates de Módulos Node.js ---
+
+get_mod_base() {
+    cat <<'EOF_SHELL_TEMPLATE'
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.js.sh}")
+# Descrição: [Script Shell que executa código Node.js]
+# Gerado por: JsGen (Shell Wrapper para Node.js)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+NODE_EXEC="$(command -v node)"
+if [ -z "$NODE_EXEC" ]; then
+    echo "Erro: Interpretador Node.js não encontrado. Instale o Node.js." >&2
+    exit 1
+fi
+
+# Executa o Node.js com o resto do script como entrada (usando heredoc)
+exec "$NODE_EXEC" - "$@" <<'EOF_NODE_CODE'
+// --- Início do Código Node.js ---
+const fs = require('fs');
+const path = require('path');
+
+// --- Constantes Globais ---
+const PROGNAME = path.basename(process.argv[0]);
+
+// --- Funções ---
+
+function logMsg(msg) {
+    console.log(`[${PROGNAME}] ${msg}`);
+}
+
+function main() {
+    logMsg("Iniciando execução via Node.js (embrulhado em Shell)...");
+    // Adicione sua lógica aqui
+}
+
+// --- Execução Principal ---
+if (require.main === module) {
+    main();
+}
+EOF_NODE_CODE
+EOF_SHELL_TEMPLATE
+}
+
+get_mod_fs() {
+    cat <<EOF
+
+// --- Módulo FS ---
+// Exemplo:
+// fs.writeFileSync('output.txt', 'Olá do Node.js!');
+EOF
+}
+
+get_mod_path() {
+    cat <<EOF
+
+// --- Módulo Path ---
+// Exemplo:
+// const resolvedPath = path.resolve(__dirname, 'data.json');
+EOF
+}
+
+get_mod_http() {
+    cat <<EOF
+
+// --- Módulo HTTP ---
+const http = require('http');
+// Exemplo de servidor simples:
+// const server = http.createServer((req, res) => {
+//     res.writeHead(200, {'Content-Type': 'text/plain'});
+//     res.end('Olá do Node.js!
+');
+// });
+// server.listen(3000, () => {
+//     logMsg('Servidor rodando em http://localhost:3000/');
+// });
+EOF
+}
+
+get_mod_process() {
+    cat <<EOF
+
+// --- Módulo Process ---
+// Exemplo:
+// console.log('Argumentos:', process.argv);
+// console.log('Ambiente:', process.env.NODE_ENV);
+EOF
+}
+
+get_mod_events() {
+    cat <<EOF
+
+// --- Módulo Events ---
+const EventEmitter = require('events');
+class MyEmitter extends EventEmitter {}
+const myEmitter = new MyEmitter();
+// Exemplo:
+// myEmitter.on('event', () => logMsg('Evento disparado!'));
+// myEmitter.emit('event');
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'jsgen init' primeiro."
+
+    case "$mod" in
+        fs)       code=$(get_mod_fs)       ; anchor="// --- Início do Código Node.js ---" ;;
+        path)     code=$(get_mod_path)     ; anchor="// --- Início do Código Node.js ---" ;;
+        http)     code=$(get_mod_http)     ; anchor="// --- Início do Código Node.js ---" ;;
+        process)  code=$(get_mod_process)  ; anchor="// --- Início do Código Node.js ---" ;;
+        events)   code=$(get_mod_events)   ; anchor="// --- Início do Código Node.js ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo após a âncora "// --- Início do Código Node.js ---"
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == "$anchor" ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no JsGen:
+"
+    printf "  - fs      : Módulo 'fs' para arquivos
+"
+    printf "  - path    : Módulo 'path' para caminhos
+"
+    printf "  - http    : Módulo 'http' para rede
+"
+    printf "  - process : Módulo 'process' (args, env)
+"
+    printf "  - events  : Módulo 'events' (EventEmitter)
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

@@ -1,0 +1,212 @@
+#!/bin/sh
+# ==============================================================================
+# Script: sqlgen
+# Descrio: Script de automao para sqlgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do SQLGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "sqlgen: %s
+" "$1"
+}
+
+error() {
+    printf "sqlgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    # Tenta validar com sqlite3 pois é mais provável de estar disponível e ser simples.
+    if command -v sqlite3 >/dev/null 2>&1; then
+        log "Validando '$val_file' com sqlite3..."
+        # Executa o script SQL em um banco de dados em memória para checar a sintaxe.
+        if sqlite3 :memory: < "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' parece correta."
+        else
+            log "Aviso: O script SQL '$val_file' pode conter erros de sintaxe."
+        fi
+    else
+        log "Aviso: Utilitário 'sqlite3' não encontrado. Validação SQL básica não realizada."
+    fi
+}
+
+usage() {
+    cat <<EOF
+SQLGen v$VERSION – Gerador de SQL Scripts (via Shell Wrapper)
+
+Uso:
+  sqlgen <comando> [opções]
+
+Comandos:
+  init <arquivo.sql.sh>        Cria um novo script SQL com wrapper shell.
+  add <arquivo.sql.sh> <mod>   Adiciona um módulo SQL (exemplo de comando).
+  list                         Lista os módulos disponíveis.
+  help                         Mostra esta ajuda.
+
+Módulos disponíveis:
+  create_table  Define uma instrução CREATE TABLE.
+  insert        Define uma instrução INSERT INTO.
+  select        Define uma instrução SELECT.
+
+Exemplo:
+  sqlgen init meu_banco.sql.sh
+  sqlgen add meu_banco.sql.sh create_table
+EOF
+}
+
+# --- Templates de Módulos SQL ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-script.sql.sh}")
+# Descrição: [Script Shell que executa comandos SQL]
+# Gerado por: SQLGen (Shell Wrapper para SQL)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+SQL_EXEC=""
+# Tenta detectar um executável SQL comum
+if command -v sqlite3 >/dev/null 2>&1; then
+    SQL_EXEC="sqlite3 :memory:" # Usa SQLite em memória por padrão
+elif command -v psql >/dev/null 2>&1; then
+    SQL_EXEC="psql" # Pode precisar de configuração de DB/usuário
+else
+    echo "Erro: Nenhum interpretador SQL (sqlite3, psql) encontrado. Instale um." >&2
+    exit 1
+fi
+
+# Executa o código SQL embarcado usando um heredoc
+exec "\$SQL_EXEC" - "$@" <<'EOF_SQL_CODE'
+-- --- Início do Código SQL ---
+-- Este script gera um arquivo .sql.sh que executa comandos SQL.
+
+-- Exemplo de instrução SQL básica
+SELECT 'Hello from SQL!';
+
+-- Fim do script SQL
+EOF_SQL_CODE
+EOF
+}
+
+get_mod_create_table() {
+    cat <<EOF
+
+-- --- Módulo CREATE TABLE ---
+-- Cria uma nova tabela no banco de dados.
+-- Exemplo:
+-- CREATE TABLE users (
+--     id INTEGER PRIMARY KEY AUTOINCREMENT,
+--     name TEXT NOT NULL,
+--     email TEXT UNIQUE
+-- );
+EOF
+}
+
+get_mod_insert() {
+    cat <<EOF
+
+-- --- Módulo INSERT ---
+-- Insere dados em uma tabela.
+-- Exemplo:
+-- INSERT INTO users (name, email) VALUES ('John Doe', 'john.doe@example.com');
+EOF
+}
+
+get_mod_select() {
+    cat <<EOF
+
+# --- Módulo SELECT ---
+# Executa uma consulta SELECT.
+# Exemplo:
+# SELECT id, name FROM users WHERE name LIKE '%Doe%';
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'sqlgen init' primeiro."
+
+    case "$mod" in
+        create_table) code=$(get_mod_create_table) ; anchor="-- --- Início do Código SQL ---" ;;
+        insert)       code=$(get_mod_insert)       ; anchor="-- --- Início do Código SQL ---" ;;
+        select)       code=$(get_mod_select)       ; anchor="-- --- Início do Código SQL ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo após a âncora "// --- Início do Código SQL ---"
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no SQLGen:
+"
+    printf "  - create_table  : Define uma instrução CREATE TABLE
+"
+    printf "  - insert        : Define uma instrução INSERT INTO
+"
+    printf "  - select        : Define uma instrução SELECT
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

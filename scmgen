@@ -1,0 +1,200 @@
+#!/bin/sh
+# ==============================================================================
+# Script: scmgen
+# Descrio: Script de automao para scmgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do SCMGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "scmgen: %s
+" "$1"
+}
+
+error() {
+    printf "scmgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v guile >/dev/null 2>&1; then
+        log "Validando '$val_file' com guile..."
+        # guile -s para executar um script
+        if guile -s "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe Scheme."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+SCMGen v$VERSION – Gerador de Scheme Scripts (via Shell Wrapper)
+
+Uso:
+  scmgen <comando> [opções]
+
+Comandos:
+  init <arquivo.scm.sh>        Cria um novo script Scheme com wrapper shell.
+  add <arquivo.scm.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                         Lista os módulos disponíveis.
+  help                         Mostra esta ajuda.
+
+Módulos disponíveis:
+  display  Procedimento básico para exibir saída.
+  args     Acesso a argumentos da linha de comando (call-arguments).
+
+Exemplo:
+  scmgen init meu_script.scm.sh
+  scmgen add meu_script.scm.sh display
+EOF
+}
+
+# --- Templates de Módulos Scheme ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-script.scm.sh}")
+# Descrição: [Script Shell que executa código Scheme]
+# Gerado por: SCMGen (Shell Wrapper para Scheme)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+SCHEME_EXEC="\$(command -v guile)" # Tenta usar Guile como interpretador Scheme padrão
+if [ -z "\$SCHEME_EXEC" ]; then
+    echo "Erro: Interpretador Scheme (Guile) não encontrado. Instale o Guile." >&2
+    exit 1
+fi
+
+# Executa o código Scheme embarcado usando um heredoc
+exec "\$SCHEME_EXEC" - "\$@" <<'EOF_SCHEME_CODE'
+;; --- Início do Código Scheme ---
+
+;; --- Constantes Globais ---
+(define PROGNAME (basename (car (command-line))))
+
+;; --- Procedimentos / Funções ---
+
+(define (logMsg msg)
+  (display (string-append "[" PROGNAME "] " msg "
+")))
+
+(define (main args)
+  (logMsg "Iniciando execução via Scheme...")
+  ;; Adicione sua lógica aqui
+)
+
+;; --- Execução Principal ---
+(if (equal? (program-arguments) (list (car (command-line)))))
+    (main (cdr (command-line)))
+    (main (command-line)))
+EOF_SCHEME_CODE
+EOF
+}
+
+get_mod_display() {
+    cat <<EOF
+
+;; --- Módulo Display ---
+;; Procedimento básico para exibir mensagens.
+;; Exemplo: (logMsg "Olá do Scheme!")
+EOF
+}
+
+get_mod_args() {
+    cat <<EOF
+
+;; --- Módulo Args ---
+;; Acesso aos argumentos da linha de comando via (command-line)
+;; Exemplo:
+;; (define args (cdr (command-line)))
+;; (if (pair? args)
+;;     (logMsg (string-append "Primeiro argumento: " (car args))))
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'scmgen init' primeiro."
+
+    case "$mod" in
+        display) code=$(get_mod_display) ; anchor=";; --- Início do Código Scheme ---" ;;
+        args)    code=$(get_mod_args)    ; anchor=";; --- Início do Código Scheme ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo após a âncora "// --- Início do Código Scheme ---"
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no SCMGen:
+"
+    printf "  - display  : Exibir mensagens básicas
+"
+    printf "  - args     : Acesso a argumentos da linha de comando
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

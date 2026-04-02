@@ -1,0 +1,228 @@
+#!/bin/sh
+# ==============================================================================
+# Script: plgen
+# Descrio: Script de automao para plgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do PlGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "plgen: %s\n" "$1"
+}
+
+error() {
+    printf "plgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v perl >/dev/null 2>&1; then
+        log "Validando '$val_file' com perl -c..."
+        # O Perl precisa do -x para ignorar o wrapper shell durante a checagem
+        if perl -x -c "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe perl."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+PlGen v$VERSION – Gerador de Perl Scripts (via Shell Wrapper)
+
+Uso:
+  plgen <comando> [opções]
+
+Comandos:
+  init <arquivo.sh>        Cria um novo script Perl com wrapper shell.
+  add <arquivo.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  getopt     Parsing de argumentos CLI (Getopt::Long).
+  json       Manipulação de JSON (JSON::PP - stdlib).
+  file       Utilitários de leitura/escrita de arquivos.
+  temp       Gestão de arquivos temporários (File::Temp).
+  path       Manipulação de caminhos (File::Spec).
+
+Exemplo:
+  plgen init meu_script.sh
+  plgen add meu_script.sh getopt
+EOF
+}
+
+# --- Templates de Módulos Perl ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.sh}")
+# Descrição: [Script Shell que executa código Perl]
+# Gerado por: PlGen (Shell Wrapper para Perl)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+# O wrapper abaixo permite que o Perl execute este arquivo ignorando o Shell
+exec perl -x "\$0" "\$@"
+
+#!perl
+use strict;
+use warnings;
+use File::Basename;
+
+# --- Variáveis Globais / Constantes ---
+my \$PROGNAME = basename(\$0);
+
+# --- Funções / Subrotinas ---
+
+sub log_msg {
+    my (\$msg) = @_;
+    print "[\$PROGNAME] \$msg\n";
+}
+
+# --- Lógica Principal ---
+
+sub main {
+    log_msg("Iniciando execução via Perl (embrulhado em Shell)...");
+    # Adicione sua lógica aqui
+}
+
+main(@ARGV);
+EOF
+}
+
+get_mod_getopt() {
+    cat <<EOF
+
+# --- Módulo Getopt ---
+use Getopt::Long;
+my \$verbose = 0;
+GetOptions("verbose" => \$verbose) or die("Erro nos argumentos\n");
+EOF
+}
+
+get_mod_json() {
+    cat <<EOF
+
+# --- Módulo JSON ---
+use JSON::PP;
+my \$json_engine = JSON::PP->new->ascii->pretty;
+# Exemplo: my \$text = \$json_engine->encode({ hello => "world" });
+EOF
+}
+
+get_mod_file() {
+    cat <<EOF
+
+# --- Módulo File Utils ---
+sub read_file {
+    my (\$path) = @_;
+    open(my \$fh, '<', \$path) or die "Não foi possível abrir \$path: \$!";
+    local \$/;
+    return <\$fh>;
+}
+EOF
+}
+
+get_mod_temp() {
+    cat <<EOF
+
+# --- Módulo Tempfile ---
+use File::Temp qw(tempfile);
+# Exemplo: my (\$fh, \$filename) = tempfile();
+EOF
+}
+
+get_mod_path() {
+    cat <<EOF
+
+# --- Módulo Path ---
+use File::Spec;
+# Exemplo: my \$path = File::Spec->catfile("dir", "file.txt");
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'plgen init' primeiro."
+
+    case "$mod" in
+        getopt) code=$(get_mod_getopt) ; anchor="# --- Variáveis Globais / Constantes ---" ;;
+        json)   code=$(get_mod_json)   ; anchor="use File::Basename;" ;;
+        file)   code=$(get_mod_file)   ; anchor="# --- Funções / Subrotinas ---" ;;
+        temp)   code=$(get_mod_temp)   ; anchor="use File::Basename;" ;;
+        path)   code=$(get_mod_path)   ; anchor="use File::Basename;" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: coloca na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "$anchor" ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no PlGen:\n"
+    printf "  - getopt : Parsing de argumentos CLI\n"
+    printf "  - json   : Manipulação de JSON (stdlib)\n"
+    printf "  - file   : Utilitários de arquivo\n"
+    printf "  - temp   : Gestão de arquivos temporários\n"
+    printf "  - path   : Manipulação de caminhos\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

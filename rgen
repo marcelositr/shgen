@@ -1,0 +1,259 @@
+#!/bin/sh
+# ==============================================================================
+# Script: rgen
+# Descrio: Script de automao para rgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do RGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "rgen: %s
+" "$1"
+}
+
+error() {
+    printf "rgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v Rscript >/dev/null 2>&1; then
+        log "Validando '$val_file' com Rscript..."
+        # Rscript --vanilla -e "source('file')" é uma forma de checar a sintaxe
+        if Rscript --vanilla -e "source('$val_file')" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe R."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+RGen v$VERSION – Gerador de R CLI Scripts (via Shell Wrapper)
+
+Uso:
+  rgen <comando> [opções]
+
+Comandos:
+  init <arquivo.sh>        Cria um novo script R CLI com wrapper shell.
+  add <arquivo.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  args     Parsing básico de argumentos CLI (array commandArgs).
+  data     Leitura/escrita de dados (ex: read.csv).
+  plot     Exemplo básico de plot.
+  stats    Exemplo de função estatística.
+
+Exemplo:
+  rgen init meu_script.R.sh
+  rgen add meu_script.R.sh data
+EOF
+}
+
+# --- Templates de Módulos R CLI ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.R.sh}")
+# Descrição: [Script Shell que executa código R CLI]
+# Gerado por: RGen (Shell Wrapper para R)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+R_EXEC="\$(command -v Rscript)"
+if [ -z "\$R_EXEC" ]; then
+    echo "Erro: Interpretador Rscript não encontrado. Instale o R." >&2
+    exit 1
+fi
+
+# Executa o código R embarcado usando um heredoc
+exec "\$R_EXEC" --vanilla - "$@" <<'EOF_R_CODE'
+# --- Início do Código R CLI ---
+
+# --- Package Requires ---
+# library(methods) # Geralmente disponível por padrão
+
+# --- Constantes Globais ---
+PROGNAME <- basename(sys.argv[0])
+
+# --- Funções / Procedimentos ---
+
+logMsg <- function(msg) {
+    cat(sprintf("[%s] %s
+", PROGNAME, msg))
+}
+
+main <- function() {
+    logMsg("Iniciando execução via R CLI...")
+    # Adicione sua lógica aqui
+}
+
+# --- Execução Principal ---
+if (interactive() && basename(sys.frame()$ofile) == basename(commandArgs(trailingOnly = FALSE)${base.dir}(1))) {
+    main()
+}
+EOF_R_CODE
+EOF
+}
+
+get_mod_args() {
+    cat <<EOF
+
+# --- Módulo CLI Args ---
+# Acessa os argumentos via 'commandArgs(trailingOnly = TRUE)'
+# Exemplo:
+# args <- commandArgs(trailingOnly = TRUE)
+# if (length(args) > 0) {
+#     logMsg(paste("Primeiro argumento:", args[1]))
+# }
+EOF
+}
+
+get_mod_data() {
+    cat <<EOF
+
+# --- Módulo Data Handling ---
+# Exemplo de leitura de CSV
+# tryCatch({
+#     data <- read.csv("input.csv")
+#     write.csv(data, "output.csv", row.names = FALSE)
+#     logMsg("CSV lido e escrito com sucesso.")
+# }, error = function(e) {
+#     logMsg(paste("Erro ao processar CSV:", e$message))
+# })
+EOF
+}
+
+get_mod_plot() {
+    cat <<EOF
+
+# --- Módulo Plotting ---
+# Exemplo básico de plot (requer pacote gráfico como 'graphics' ou 'ggplot2')
+# graphics::plot(1:10, main="Exemplo Plot")
+# Sys.sleep(2) # Manter o plot aberto por 2s antes de fechar se for script autônomo
+# quit() # Para garantir o fechamento após o plot
+EOF
+}
+
+get_mod_stats() {
+    cat <<EOF
+
+# --- Módulo Stats ---
+# Exemplo: Cálculo de média e desvio padrão
+# set.seed(123) # Para reprodutibilidade
+# sample_data <- rnorm(100)
+# mean_val <- mean(sample_data)
+# sd_val <- sd(sample_data)
+# logMsg(paste("Média:", mean_val, "DP:", sd_val))
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'rgen init' primeiro."
+
+    case "$mod" in
+        args)   code=$(get_mod_args)  ; anchor="set PROGNAME \[file tail \$argv0\]" ;; # Âncora específica para R
+        data)   code=$(get_mod_data)  ; anchor="# --- Início do Código R CLI ---" ;;
+        plot)   code=$(get_mod_plot)  ; anchor="# --- Início do Código R CLI ---" ;;
+        stats)  code=$(get_mod_stats) ; anchor="# --- Início do Código R CLI ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            # Para 'args', inserir após a definição de PROGNAME
+            if [[ "$mod" == "args" ]] && [[ "$line" == "set PROGNAME \[file tail \$argv0\]" ]]; then
+                printf "%s
+" "$code" >> "$tmp_edit"
+                inserted=true
+            # Para 'data', 'plot', 'stats', inserir após o cabeçalho
+            elif [[ "$mod" == "data" ]] || [[ "$mod" == "plot" ]] || [[ "$mod" == "stats" ]]; then
+                 if [[ "$line" == "# --- Início do Código R CLI ---" ]]; then
+                    printf "%s
+" "$code" >> "$tmp_edit"
+                    inserted=true
+                 fi
+            fi
+        fi
+    done < "$file"
+    
+    # Caso a âncora não seja encontrada explicitamente para a inserção, append ao final
+    if ! $inserted; then
+        printf "%s
+" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no RGen:
+"
+    printf "  - args     : Parsing básico de argumentos CLI
+"
+    printf "  - data     : Leitura/escrita de dados (CSV)
+"
+    printf "  - plot     : Exemplo de plot básico
+"
+    printf "  - stats    : Exemplo de função estatística
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

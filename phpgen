@@ -1,0 +1,254 @@
+#!/bin/sh
+# ==============================================================================
+# Script: phpgen
+# Descrio: Script de automao para phpgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do PhpGen
+VERSION="1.0.1"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "phpgen: %s
+" "$1"
+}
+
+error() {
+    printf "phpgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v php >/dev/null 2>&1; then
+        log "Validando '$val_file' com php -l..."
+        if php -l "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+            # Tenta rodar PHP-CS-Fixer se disponível (opcional)
+            if command -v php-cs-fixer >/dev/null 2>&1; then
+                log "Validando '$val_file' com PHP-CS-Fixer..."
+                if php-cs-fixer fix --dry-run --diff "$val_file"; then
+                    log "Validação PHP-CS-Fixer concluída: Código está formatado."
+                else
+                    log "Aviso: PHP-CS-Fixer encontrou problemas de formatação em '$val_file'."
+                fi
+            fi
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe PHP."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+PhpGen v$VERSION – Gerador de PHP CLI Scripts (via Shell Wrapper)
+
+Uso:
+  phpgen <comando> [opções]
+
+Comandos:
+  init <arquivo.sh>        Cria um novo script PHP CLI com wrapper shell.
+  add <arquivo.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  cli      Parsing básico de argumentos CLI (array \$argv).
+  fs       Módulo 'fs' para operações de arquivo (ex: file_get_contents).
+  json     Manipulação de JSON (json_encode, json_decode).
+  http     Exemplo de requisição HTTP simples (file_get_contents com stream).
+
+Exemplo:
+  phpgen init meu_script.php.sh
+  phpgen add meu_script.php.sh cli
+EOF
+}
+
+# --- Templates de Módulos PHP CLI ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: \$(basename "\${file:-script.php.sh}")
+# Descrição: [Script Shell que executa código PHP CLI]
+# Gerado por: PhpGen (Shell Wrapper para PHP)
+# Data: \$(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+PHP_EXEC="\$(\command -v php)"
+if [ -z "\$PHP_EXEC" ]; then
+    echo "Erro: Interpretador PHP não encontrado. Instale o PHP CLI." >&2
+    exit 1
+fi
+
+# Executa o código PHP embarcado usando um heredoc
+exec "\$PHP_EXEC" - "\$@" <<'EOF_PHP_CODE'
+<?php
+// --- Início do Código PHP CLI ---
+
+// --- Imports / Namespace ---
+// (Para scripts simples, imports diretos são comuns)
+
+// --- Constantes Globais ---
+define('PROGNAME', basename(\$_SERVER['argv'][0] ?? 'script.php'));
+
+// --- Funções / Classes ---
+
+function logMsg(\$msg) {
+    echo "[", PROGNAME, "] ", \$msg, PHP_EOL;
+}
+
+function main() {
+    logMsg("Iniciando execução via PHP CLI...");
+    // Adicione sua lógica aqui
+}
+
+// --- Execução Principal ---
+if (basename(__FILE__) == basename(\$_SERVER['argv'][0] ?? '')) {
+    main();
+}
+?>
+EOF_PHP_CODE
+EOF
+}
+
+get_mod_cli() {
+    cat <<EOF
+
+// --- Módulo CLI ---
+// Processamento básico de argumentos via \$argv
+// Exemplo:
+// if (isset(\$argv[1])) {
+//     logMsg("Primeiro argumento: " . \$argv[1]);
+// }
+EOF
+}
+
+get_mod_fs() {
+    cat <<EOF
+
+// --- Módulo FS ---
+// Exemplo:
+// try {
+//     \$content = file_get_contents('input.txt');
+//     file_put_contents('output.txt', \$content);
+//     logMsg('Arquivo lido e escrito com sucesso.');
+// } catch (Exception \$e) {
+//     echo 'Erro: ', \$e->getMessage(), PHP_EOL;
+// }
+EOF
+}
+
+get_mod_json() {
+    cat <<EOF
+
+// --- Módulo JSON ---
+// Exemplo:
+// \$data = ['hello' => 'world'];
+// echo json_encode(\$data, JSON_PRETTY_PRINT), PHP_EOL;
+EOF
+}
+
+get_mod_http() {
+    cat <<EOF
+
+// --- Módulo HTTP ---
+// Exemplo de requisição GET simples com file_get_contents (pode requerer allow_url_fopen)
+// try {
+//     \$url = 'https://httpbin.org/get';
+//     \$context = stream_context_create(['http' => ['method' => 'GET']]);
+//     \$response = file_get_contents(\$url, false, \$context);
+//     echo "Resposta HTTP: ", substr(\$response, 0, 100), "...", PHP_EOL;
+// } catch (Exception \$e) {
+//     echo 'Erro HTTP: ', \$e->getMessage(), PHP_EOL;
+// }
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'phpgen init' primeiro."
+
+    case "$mod" in
+        cli)      code=$(get_mod_cli)    ; anchor="// --- Início do Código PHP CLI ---" ;;
+        fs)       code=$(get_mod_fs)     ; anchor="// --- Início do Código PHP CLI ---" ;;
+        json)     code=$(get_mod_json)   ; anchor="// --- Início do Código PHP CLI ---" ;;
+        http)     code=$(get_mod_http)   ; anchor="// --- Início do Código PHP CLI ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo após a âncora "// --- Início do Código PHP CLI ---"
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == "$anchor" ]] && [[ "$inserted" == false ]]; then
+            printf "%s
+" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no PhpGen:
+"
+    printf "  - cli      : Parsing básico de argumentos CLI
+"
+    printf "  - fs       : Operações de arquivo
+"
+    printf "  - json     : Manipulação de JSON
+"
+    printf "  - http     : Requisições HTTP básicas
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

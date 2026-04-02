@@ -1,0 +1,280 @@
+#!/bin/sh
+# ==============================================================================
+# Script: tclgen
+# Descrio: Script de automao para tclgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do TclGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "tclgen: %s
+" "$1"
+}
+
+error() {
+    printf "tclgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v tclsh >/dev/null 2>&1; then
+        log "Validando '$val_file' com tclsh -c..."
+        if tclsh -c "source {$val_file}" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe Tcl."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+TclGen v$VERSION – Gerador de Tcl Scripts (via Shell Wrapper)
+
+Uso:
+  tclgen <comando> [opções]
+
+Comandos:
+  init <arquivo.sh>        Cria um novo script Tcl com wrapper shell.
+  add <arquivo.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  args     Parsing básico de argumentos CLI (array argv).
+  proc     Definição de procedimentos (funções).
+  file     Operações básicas de arquivo (ex: file join).
+  json     Manipulação de JSON (package require json).
+  http     Requisição HTTP básica (package require http).
+
+Exemplo:
+  tclgen init meu_script.tcl.sh
+  tclgen add meu_script.tcl.sh args
+EOF
+}
+
+# --- Templates de Módulos Tcl ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.tcl.sh}")
+# Descrição: [Script Shell que executa código Tcl]
+# Gerado por: TclGen (Shell Wrapper para Tcl)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+TCL_EXEC="\$(command -v tclsh)"
+if [ -z "\$TCL_EXEC" ]; then
+    echo "Erro: Interpretador Tcl não encontrado. Instale o Tcl/Tk." >&2
+    exit 1
+fi
+
+# Executa o código Tcl embarcado usando um heredoc
+exec "\$TCL_EXEC" - "$@" <<'EOF_TCL_CODE'
+# --- Início do Código Tcl ---
+
+# --- Package Requires ---
+# namespace eval ::app {} ; # Exemplo de namespace
+
+# --- Constantes Globais ---
+set PROGNAME [file tail \$argv0]
+
+# --- Procedimentos / Funções ---
+
+proc logMsg {msg} {
+    puts "[\$::PROGNAME] \$msg"
+}
+
+proc main {args} {
+    logMsg "Iniciando execução via Tcl..."
+    # Adicione sua lógica aqui
+}
+
+# --- Execução Principal ---
+if {\[info script] eq \$argv0} {
+    main \$argv
+}
+EOF_TCL_CODE
+EOF
+}
+
+get_mod_args() {
+    cat <<EOF
+
+# --- Módulo Argparse (simulado) ---
+# Processamento básico de argumentos via \$argv
+# Exemplo:
+# set first_arg [lindex \$argv 0]
+# logMsg "Primeiro argumento: \$first_arg"
+EOF
+}
+
+get_mod_proc() {
+    cat <<EOF
+
+# --- Módulo Procedimentos ---
+proc example_proc {name} {
+    return "Hello, \$name!"
+}
+EOF
+}
+
+get_mod_file() {
+    cat <<EOF
+
+# --- Módulo File Utils ---
+# Exemplo:
+# set content [file join \$::PROGNAME "data.txt"]
+# set f [open \$content r]
+# set file_content [read \$f]
+# close \$f
+# logMsg "Conteúdo lido: \$file_content"
+EOF
+}
+
+get_mod_json() {
+    cat <<EOF
+
+# --- Módulo JSON ---
+# Requer o pacote 'json' (geralmente instalado com Tcl)
+package require json
+# Exemplo:
+# set data [list hello world]
+# set json_str [json::jsonencode \$data]
+# logMsg "JSON: \$json_str"
+EOF
+}
+
+get_mod_http() {
+    cat <<EOF
+
+# --- Módulo HTTP ---
+# Requer o pacote 'http' (geralmente instalado com Tcl)
+package require http
+
+# Exemplo de requisição GET simples:
+# set url "https://httpbin.org/get"
+# set token [http::geturl \$url]
+# set response [http::get $token]
+# puts "Resposta HTTP: [string range \$response 0 100]..."
+# http::close $token
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'tclgen init' primeiro."
+
+    case "$mod" in
+        args)     code=$(get_mod_args)     ; anchor="set PROGNAME \[file tail \$argv0\]" ;;
+        proc)     code=$(get_mod_proc)     ; anchor="# --- Funções / Procedimentos ---" ;;
+        file)     code=$(get_mod_file)     ; anchor="# --- Funções Auxiliares ---" ;;
+        json)     code=$(get_mod_json)     ; anchor="# --- Package Requires ---" ;;
+        http)     code=$(get_mod_http)     ; anchor="# --- Package Requires ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        if [[ "$line" == *"$anchor"* ]] && [[ "$inserted" == false ]]; then
+            # Para 'args', inserir após a definição de PROGNAME
+            if [[ "$mod" == "args" ]] && [[ "$line" == "set PROGNAME \[file tail \$argv0\]" ]]; then
+                printf "%s
+" "$code" >> "$tmp_edit"
+                inserted=true
+            # Para 'json' e 'http', inserir antes de outras requires/packages se existirem
+            elif [[ "$mod" == "json" ]] || [[ "$mod" == "http" ]]; then
+                if [[ "$line" == "# --- Package Requires ---" ]]; then
+                    # Tenta encontrar um 'package require' existente para inserir depois, ou insere no local
+                    printf "%s
+" "$code" >> "$tmp_edit"
+                    inserted=true
+                fi
+            # Para 'file' e 'proc', inserir nas Funções Auxiliares
+            elif [[ "$mod" == "file" ]] || [[ "$mod" == "proc" ]]; then
+                 if [[ "$line" == "# --- Funções / Procedimentos ---" ]]; then
+                    printf "%s
+" "$code" >> "$tmp_edit"
+                    inserted=true
+                 fi
+            fi
+        fi
+    done < "$file"
+    
+    # Caso a âncora não seja encontrada explicitamente para a inserção, append ao final
+    if ! $inserted; then
+        printf "%s
+" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no TclGen:
+"
+    printf "  - args     : Parsing básico de argumentos CLI
+"
+    printf "  - proc     : Definição de procedimentos (funções)
+"
+    printf "  - file     : Utilitários de arquivo
+"
+    printf "  - json     : Manipulação de JSON (package require json)
+"
+    printf "  - http     : Requisições HTTP (package require http)
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

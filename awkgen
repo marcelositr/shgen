@@ -1,0 +1,262 @@
+#!/bin/sh
+# ==============================================================================
+# Script: awkgen
+# Descrio: Script de automao para awkgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do AwkGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "awkgen: %s
+" "$1"
+}
+
+error() {
+    printf "awkgen erro: %s
+" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v awk >/dev/null 2>&1; then
+        log "Validando '$val_file' com awk..."
+        # awk -f <file> executa o script AWK. Se houver erro de sintaxe, o awk falhará.
+        if echo "" | awk -f "$val_file" >/dev/null 2>&1; then # Executa um script vazio para checar a sintaxe
+            log "Validação concluída: Sintaxe de '$val_file' parece correta."
+        else
+            log "Aviso: O script '$val_file' contém erros de sintaxe AWK."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+AwkGen v$VERSION – Gerador de AWK Scripts (via Shell Wrapper)
+
+Uso:
+  awkgen <comando> [opções]
+
+Comandos:
+  init <arquivo.awk.sh>        Cria um novo script AWK com wrapper shell.
+  add <arquivo.awk.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                         Lista os módulos disponíveis.
+  help                         Mostra esta ajuda.
+
+Módulos disponíveis:
+  begin      Bloco BEGIN para inicialização.
+  print      Procedimento básico para exibir saída.
+  args       Acesso a argumentos da linha de comando (ARGC, ARGV).
+  fields     Processamento básico de campos de entrada.
+
+Exemplo:
+  awkgen init meu_script.awk.sh
+  awkgen add meu_script.awk.sh begin
+EOF
+}
+
+# --- Templates de Módulos AWK ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# =======================================
+# Script: $(basename "${file:-script.awk.sh}")
+# Descrição: [Script Shell que executa código AWK]
+# Gerado por: AwkGen (Shell Wrapper para AWK)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# =======================================
+
+AWK_EXEC="\$(command -v awk)"
+if [ -z "\$AWK_EXEC" ]; then
+    echo "Erro: Interpretador AWK não encontrado. Instale o AWK." >&2
+    exit 1
+fi
+
+# Executa o código AWK embarcado usando um heredoc
+exec "\$AWK_EXEC" -f - "$@" <<'EOF_AWK_CODE'
+# --- Início do Código AWK ---
+
+# --- Bloco BEGIN ---
+BEGIN {
+    # Inicialização
+    progname = "(unknown)"
+    if (length(FILENAME) > 0) { # ARGV[0] is often the script name in some awk versions, but not always reliable with exec
+        progname = FILENAME # This might be the script name if passed correctly
+    } else {
+        progname = ARGV[0] # Fallback for script name
+    }
+    print sprintf("[%s] Iniciando execução...", progname)
+}
+
+# --- Bloco Principal (Processamento por linha) ---
+{
+    # Processamento de cada linha de entrada
+    # Exemplo: print "Linha: " NR ": " \$0
+}
+
+# --- Bloco END ---
+END {
+    print "Execução finalizada."
+}
+EOF_AWK_CODE
+EOF
+}
+
+get_mod_begin() {
+    cat <<EOF
+
+# --- Bloco BEGIN ---
+# Este bloco é executado uma vez antes de processar qualquer entrada.
+# Se já existir um BEGIN, este código será anexado.
+# Exemplo:
+# BEGIN {
+#     FS = "," # Define o separador de campo como vírgula
+#     print "Configurado FS para vírgula."
+# }
+EOF
+}
+
+get_mod_print() {
+    cat <<EOF
+
+# --- Procedimento Print ---
+# Exemplo de saída formatada
+# {
+#     print sprintf("[%s] Processando linha %d: %s", FILENAME, NR, \$0)
+# }
+EOF
+}
+
+get_mod_args() {
+    cat <<EOF
+
+# --- Módulo Args ---
+# Acesso a ARGC e ARGV
+# ARGC: Número de argumentos (inclui o nome do script)
+# ARGV: Array de argumentos (ARGC[0] é o nome do script)
+# Exemplo:
+# print "Número total de argumentos: " ARGC "
+";
+# print "Nome do script: " ARGV[0] "
+";
+# if (ARGC > 1) {
+#     print "Primeiro argumento real: " ARGV[1] "
+";
+# }
+EOF
+}
+
+get_mod_fields() {
+    cat <<EOF
+
+# --- Módulo Fields ---
+# Processamento de campos de entrada
+# O AWK divide cada linha em campos: $1, $2, ..., $NF (número de campos)
+# Exemplo:
+# {
+#     print "Campos da linha " NR ":"
+#     for (i = 1; i <= NF; i++) {
+#         print "  Campo " i ": " $i
+#     }
+# }
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'awkgen init' primeiro."
+
+    case "$mod" in
+        begin)  code=$(get_mod_begin)  ; anchor="{ # --- Início do Código AWK ---" ;;
+        print)  code=$(get_mod_print)  ; anchor="{ # --- Bloco Principal (Processamento por linha) ---" ;;
+        args)   code=$(get_mod_args)   ; anchor="{ # --- Início do Código AWK ---" ;; # Inserir no início
+        fields) code=$(get_mod_fields) ; anchor="{ # --- Bloco Principal (Processamento por linha) ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: adiciona o módulo na seção correta
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s
+" "$line" >> "$tmp_edit"
+        # Tenta encontrar a âncora para inserir o módulo
+        case "$line" in
+            *"$anchor"*)
+                if [ "$inserted" = false ]; then
+                    printf "%s
+" "$code" >> "$tmp_edit"
+                    inserted=true
+                fi
+                ;;
+        esac
+    done < "$file"
+    
+    # Se a âncora não for encontrada, simplesmente anexa ao final
+    if ! $inserted; then
+        printf "%s
+" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no AwkGen:
+"
+    printf "  - begin    : Bloco BEGIN para inicialização
+"
+    printf "  - print    : Procedimento básico para exibir saída
+"
+    printf "  - args     : Acesso a argumentos da linha de comando (ARGC, ARGV)
+"
+    printf "  - fields   : Processamento básico de campos de entrada
+"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

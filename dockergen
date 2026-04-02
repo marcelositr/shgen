@@ -1,0 +1,305 @@
+#!/bin/sh
+# ==============================================================================
+# Script: dockergen
+# Descrio: Script de automao para dockergen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+IFS='
+'
+
+VERSION="1.0.0"
+
+log() {
+    printf "dockergen: %s\n" "$1"
+}
+
+error() {
+    printf "dockergen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate() {
+
+file="$1"
+
+if ! command -v docker >/dev/null 2>&1
+then
+    log "docker não encontrado (skip validação)"
+    return
+fi
+
+tmp=$(mktemp -d)
+
+cp "$file" "$tmp/Dockerfile"
+
+if docker build --quiet "$tmp" >/dev/null 2>&1
+then
+    log "Dockerfile válido"
+else
+    log "aviso: possível erro de sintaxe"
+fi
+
+rm -rf "$tmp"
+
+}
+
+usage() {
+
+cat <<EOF
+DockerGen v$VERSION
+
+Uso:
+
+dockergen init Dockerfile
+dockergen add Dockerfile modulo
+dockergen list
+
+Modulos:
+
+base
+workdir
+copy
+run
+cmd
+env
+expose
+
+EOF
+
+}
+
+get_base() {
+
+cat <<'EOF'
+# ------------------------------------------------------------------------------
+# Dockerfile gerado por DockerGen
+# ------------------------------------------------------------------------------
+
+FROM alpine:latest
+
+# --- módulos adicionados abaixo ---
+
+# --- fim módulos ---
+
+CMD ["sh"]
+EOF
+
+}
+
+mod_base() {
+
+cat <<'EOF'
+
+# --- base ---
+FROM alpine:latest
+EOF
+
+}
+
+mod_workdir() {
+
+cat <<'EOF'
+
+# --- workdir ---
+WORKDIR /app
+EOF
+
+}
+
+mod_copy() {
+
+cat <<'EOF'
+
+# --- copy ---
+COPY . /app
+EOF
+
+}
+
+mod_run() {
+
+cat <<'EOF'
+
+# --- run ---
+RUN echo "build step"
+EOF
+
+}
+
+mod_cmd() {
+
+cat <<'EOF'
+
+# --- cmd ---
+CMD ["sh"]
+EOF
+
+}
+
+mod_env() {
+
+cat <<'EOF'
+
+# --- env ---
+ENV APP_ENV=production
+EOF
+
+}
+
+mod_expose() {
+
+cat <<'EOF'
+
+# --- expose ---
+EXPOSE 8080
+EOF
+
+}
+
+cmd_init() {
+
+[ $# -eq 1 ] || usage
+
+file="$1"
+
+[ -f "$file" ] && error "arquivo existe"
+
+get_base > "$file"
+
+log "criado $file"
+
+validate "$file"
+
+}
+
+cmd_add() {
+
+[ $# -eq 2 ] || usage
+
+file="$1"
+mod="$2"
+
+[ -f "$file" ] || error "arquivo não existe"
+
+case "$mod" in
+
+base)
+code=$(mod_base)
+;;
+
+workdir)
+code=$(mod_workdir)
+;;
+
+copy)
+code=$(mod_copy)
+;;
+
+run)
+code=$(mod_run)
+;;
+
+cmd)
+code=$(mod_cmd)
+;;
+
+env)
+code=$(mod_env)
+;;
+
+expose)
+code=$(mod_expose)
+;;
+
+*)
+error "modulo invalido"
+;;
+
+esac
+
+tmp=$(mktemp)
+
+trap 'rm -f "$tmp"' EXIT
+
+inserted=false
+
+while IFS= read -r line
+do
+
+printf "%s\n" "$line" >> "$tmp"
+
+case "$line" in
+*"--- módulos adicionados abaixo ---"*)
+
+if [ "$inserted" = false ]
+then
+
+printf "%s\n" "$code" >> "$tmp"
+
+inserted=true
+
+fi
+
+;;
+
+esac
+
+done < "$file"
+
+mv "$tmp" "$file"
+
+trap - EXIT
+
+log "modulo $mod adicionado"
+
+validate "$file"
+
+}
+
+cmd_list() {
+
+printf "Modulos disponíveis:\n"
+
+printf " base\n"
+printf " workdir\n"
+printf " copy\n"
+printf " run\n"
+printf " cmd\n"
+printf " env\n"
+printf " expose\n"
+
+}
+
+[ $# -lt 1 ] && usage && exit 0
+
+cmd="$1"
+
+shift
+
+case "$cmd" in
+
+init)
+cmd_init "$@"
+;;
+
+add)
+cmd_add "$@"
+;;
+
+list)
+cmd_list
+;;
+
+help)
+usage
+;;
+
+*)
+error "comando invalido"
+;;
+
+esac

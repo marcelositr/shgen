@@ -1,0 +1,249 @@
+#!/bin/sh
+# ==============================================================================
+# Script: shgen
+# Descrio: Script de automao para shgen
+# Gerado por: Marcelo Trindade - @marcelositr
+# Data: 2026-04-02 19:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do ShGen
+VERSION="0.1.2"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "shgen: %s\n" "$1"
+}
+
+error() {
+    printf "shgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    if command -v shellcheck >/dev/null 2>&1; then
+        log "Validando '$val_file' com shellcheck..."
+        if shellcheck -s sh "$val_file"; then
+            log "Validação concluída: Script '$val_file' está seguro."
+        else
+            log "Aviso: shellcheck encontrou possíveis problemas em '$val_file'."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+ShGen v$VERSION – Gerador de Shell Scripts Portáteis
+
+Uso:
+  shgen <comando> [opções]
+
+Comandos:
+  init <arquivo.sh>        Cria um novo script com o cabeçalho base.
+  add <arquivo.sh> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  cleanup    Gestão de arquivos temporários e traps.
+  check_f    Função para validar existência de arquivos.
+  getopts    Esqueleto para parsing de argumentos (flags).
+  path_u     Configuração de PATH mínimo e checagem de root.
+  loop       Exemplo de loop de globbing seguro.
+
+Exemplo:
+  shgen init meuscript.sh
+  shgen add meuscript.sh cleanup
+EOF
+}
+
+# --- Templates de Módulos (POSIX compliant) ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.sh}")
+# Descrição: [Descreva a finalidade do script aqui]
+# Gerado por: ShGen (Shell Script Generator)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+# --- Configurações de Segurança ---
+set -eu
+IFS='
+'
+
+# --- Variáveis Globais / Constantes ---
+PROGNAME=\$(basename "\$0")
+readonly PROGNAME
+
+# --- Funções Auxiliares ---
+
+# log: Imprime mensagens formatadas no stdout
+log() {
+    printf "[%s] %s\n" "\$PROGNAME" "\$1"
+}
+
+# --- Lógica Principal ---
+
+main() {
+    log "Iniciando execução..."
+    # Adicione sua lógica aqui
+}
+
+# Execução do ponto de entrada
+main "\$@"
+EOF
+}
+
+get_mod_cleanup() {
+    cat <<EOF
+
+# --- Módulo Cleanup ---
+tmpfile=\$(mktemp)
+trap 'rm -f "\$tmpfile"' EXIT
+log "Temporário criado em: \$tmpfile"
+EOF
+}
+
+get_mod_check_f() {
+    cat <<EOF
+
+# --- Módulo Check File ---
+check_file() {
+    [ -f "\$1" ] || { log "Erro: Arquivo não existe: \$1"; exit 1; }
+}
+EOF
+}
+
+get_mod_getopts() {
+    cat <<EOF
+
+# --- Módulo Getopts ---
+# Adicione isso dentro ou antes da função main()
+usage() {
+    printf "Uso: %s [-h] [-v]\n" "\$0"
+    exit 1
+}
+
+while getopts "hv" opt; do
+    case "\$opt" in
+        h) usage ;;
+        v) log "Versão 1.0.0" ; exit 0 ;;
+        *) usage ;;
+    esac
+done
+shift \$((OPTIND - 1))
+EOF
+}
+
+get_mod_path_u() {
+    cat <<EOF
+
+# --- Módulo Path & User ---
+PATH=\${PATH:-/bin:/usr/bin}
+export PATH
+
+if [ "\$(id -u)" -eq 0 ]; then
+    log "Aviso: Rodando como root."
+fi
+EOF
+}
+
+get_mod_loop() {
+    cat <<EOF
+
+# --- Módulo Loop Seguro ---
+# Processar arquivos com segurança
+for f in *; do
+    [ -e "\$f" ] || continue
+    log "Arquivo encontrado: \$f"
+done
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'shgen init' primeiro."
+
+    case "$mod" in
+        cleanup) code=$(get_mod_cleanup) ;;
+        check_f) code=$(get_mod_check_f) ;;
+        getopts) code=$(get_mod_getopts) ;;
+        path_u)  code=$(get_mod_path_u) ;;
+        loop)    code=$(get_mod_loop) ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Inserção inteligente: coloca na seção correta conforme o módulo
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    # Determina onde inserir: Funções ou antes do main
+    if [ "$mod" = "check_f" ]; then
+        anchor="# --- Funções Auxiliares ---"
+    else
+        anchor="# --- Lógica Principal ---"
+    fi
+
+    while IFS= read -r line; do
+        if [ "$line" = "$anchor" ]; then
+            printf "%s\n" "$line" >> "$tmp_edit"
+            printf "%s\n" "$code" >> "$tmp_edit"
+        else
+            printf "%s\n" "$line" >> "$tmp_edit"
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no ShGen:\n"
+    printf "  - cleanup  : Temporários e traps\n"
+    printf "  - check_f  : Validação de arquivos\n"
+    printf "  - getopts  : Parsing de argumentos\n"
+    printf "  - path_u   : PATH e verificação de root\n"
+    printf "  - loop     : Globbing seguro\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac
