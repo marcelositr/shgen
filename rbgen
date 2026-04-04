@@ -1,0 +1,214 @@
+#!/bin/sh
+# ==============================================================================
+# Script: rbgen
+# Descrição: Script de automação para rbgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 17:10
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do RbGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "rbgen: %s\n" "$1"
+}
+
+error() {
+    printf "rbgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    RUBY_EXEC=""
+    if command -v ruby >/dev/null 2>&1; then
+        RUBY_EXEC="ruby"
+    fi
+
+    if [ -n "$RUBY_EXEC" ]; then
+        log "Validando '$val_file' com $RUBY_EXEC -c..."
+        if "$RUBY_EXEC" -c "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe Ruby."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+RbGen v$VERSION – Gerador de Ruby Scripts (via Shell Wrapper)
+
+Uso:
+  rbgen <comando> [opções]
+
+Comandos:
+  init <arquivo.rb>        Cria um novo script Ruby com wrapper shell.
+  add <arquivo.rb> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  logger    Configuração de log padrão (require 'logger').
+  optparse  Parsing de argumentos (require 'optparse').
+  tempfile  Gestão de arquivos temporários.
+  fileutils Operações avançadas de arquivo.
+
+Exemplo:
+  rbgen init meu_script.rb
+  rbgen add meu_script.rb logger
+EOF
+}
+
+# --- Templates de Módulos Ruby ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.rb}")
+# Descrição: [Script Shell que executa código Ruby]
+# Gerado por: RbGen (Shell Wrapper para Ruby)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+exec ruby -x "\$0" "\$@"
+#!ruby
+
+# --- Início do Código Ruby ---
+
+# --- Constantes Globais ---
+PROGNAME = File.basename(\$0)
+
+# --- Funções / Métodos ---
+
+def main
+  puts "[#{PROGNAME}] Iniciando execução via Ruby..."
+  # Adicione sua lógica aqui
+end
+
+# --- Execução Principal ---
+if __FILE__ == \$0
+  main
+end
+EOF
+}
+
+get_mod_logger() {
+    cat <<EOF
+
+require 'logger'
+# --- Módulo Logger ---
+logger = Logger.new(STDOUT)
+logger.level = Logger::INFO
+EOF
+}
+
+get_mod_optparse() {
+    cat <<EOF
+
+require 'optparse'
+# --- Módulo Optparse ---
+options = {}
+OptionParser.new do |opts|
+  opts.banner = "Uso: #{PROGNAME} [opções]"
+  opts.on("-v", "--verbose", "Execução detalhada") { options[:verbose] = true }
+end.parse!
+EOF
+}
+
+get_mod_tempfile() {
+    cat <<EOF
+
+require 'tempfile'
+# --- Módulo Tempfile ---
+# Tempfile.create('foo') do |f|
+#   f.write('bar')
+# end
+EOF
+}
+
+get_mod_fileutils() {
+    cat <<EOF
+
+require 'fileutils'
+# --- Módulo FileUtils ---
+# FileUtils.mkdir_p('a/b/c')
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'rbgen init' primeiro."
+
+    case "$mod" in
+        logger)    code=$(get_mod_logger)    ; anchor="# --- Início do Código Ruby ---" ;;
+        optparse)  code=$(get_mod_optparse)  ; anchor="# --- Início do Código Ruby ---" ;;
+        tempfile)  code=$(get_mod_tempfile)  ; anchor="# --- Início do Código Ruby ---" ;;
+        fileutils) code=$(get_mod_fileutils) ; anchor="# --- Início do Código Ruby ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "$anchor" ] && [ "$inserted" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no RbGen:\n"
+    printf "  - logger    : Configuração de log padrão\n"
+    printf "  - optparse  : Parsing de argumentos CLI\n"
+    printf "  - tempfile  : Gestão de arquivos temporários\n"
+    printf "  - fileutils : Operações avançadas de arquivo\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

@@ -1,0 +1,203 @@
+#!/bin/sh
+# ==============================================================================
+# Script: ktgen
+# Descrição: Script de automação para ktgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 16:30
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do KtGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "ktgen: %s\n" "$1"
+}
+
+error() {
+    printf "ktgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    KT_EXEC=""
+    if command -v kotlinc >/dev/null 2>&1; then
+        KT_EXEC="kotlinc"
+    fi
+
+    if [ -n "$KT_EXEC" ]; then
+        log "Validando '$val_file' com $KT_EXEC..."
+        if "$KT_EXEC" "$val_file" -d /tmp >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe Kotlin."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+KtGen v$VERSION – Gerador de Kotlin Scripts
+
+Uso:
+  ktgen <comando> [opções]
+
+Comandos:
+  init <arquivo.kt>         Cria um novo arquivo Kotlin com layout base.
+  add <arquivo.kt> <mod>    Adiciona um módulo funcional ao arquivo.
+  list                      Lista os módulos disponíveis.
+  help                      Mostra esta ajuda.
+
+Módulos disponíveis:
+  io       Operações de entrada/saída (java.io.*).
+  util     Coleções e utilitários (java.util.*).
+  net      Rede e HTTP (java.net.*).
+  args     Acesso a argumentos da linha de comando.
+
+Exemplo:
+  ktgen init meu_script.kt
+  ktgen add meu_script.kt io
+EOF
+}
+
+# --- Templates de Módulos Kotlin ---
+
+get_mod_base() {
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-script.kt}")
+ * Descrição: [Descreva a finalidade deste script aqui]
+ * Gerado por: KtGen (Kotlin Script Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+// -- MODULE_IMPORTS --
+
+fun main(args: Array<String>) {
+    println("[PROGNAME] Iniciando execução...")
+
+    // Adicione sua lógica aqui
+}
+
+// -- MODULE_FUNCTIONS --
+EOF
+}
+
+# --- Definições de Módulos Kotlin ---
+
+# io
+mod_io_imp='import java.io.File'
+mod_io_code="
+fun checkFile(path: String) {
+    val file = File(path)
+    println(\"Arquivo existe: \${file.exists()}\")
+}"
+
+# util
+mod_util_imp='import java.util.*'
+mod_util_code="
+fun listExample() {
+    val items = listOf(\"Item 1\", \"Item 2\")
+    println(\"Itens: \$items\")
+}"
+
+# net
+mod_net_imp='import java.net.URL'
+mod_net_code="
+fun netExample(urlStr: String) {
+    val url = URL(urlStr)
+    println(\"Host: \${url.host}\")
+}"
+
+# args
+mod_args_imp=''
+mod_args_code="
+fun printArgs(args: Array<String>) {
+    args.forEachIndexed { index, arg ->
+        println(\"Arg \$index: \$arg\")
+    }
+}"
+
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Arquivo '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'ktgen init' primeiro."
+
+    case "$mod" in
+        io)   imp=$mod_io_imp   ; code=$mod_io_code ;;
+        util) imp=$mod_util_imp ; code=$mod_util_code ;;
+        net)  imp=$mod_net_imp  ; code=$mod_net_code ;;
+        args) imp=$mod_args_imp ; code=$mod_args_code ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted_imp=false
+    inserted_code=false
+    while IFS= read -r line; do
+        if [ "$line" = "// -- MODULE_IMPORTS --" ] && [ "$inserted_imp" = false ]; then
+            if [ -n "$imp" ]; then
+                printf "%s\n" "$imp" >> "$tmp_edit"
+            fi
+            inserted_imp=true
+        fi
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "// -- MODULE_FUNCTIONS --" ] && [ "$inserted_code" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted_code=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no KtGen:\n"
+    printf "  - io   : Operações de entrada/saída (java.io.File)\n"
+    printf "  - util : Coleções e utilitários Kotlin\n"
+    printf "  - net  : Rede e HTTP (java.net.URL)\n"
+    printf "  - args : Acesso a argumentos da linha de comando\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

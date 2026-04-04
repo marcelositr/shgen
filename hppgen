@@ -1,0 +1,199 @@
+#!/bin/sh
+# ==============================================================================
+# Script: hppgen
+# Descrição: Script de automação para hppgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 15:30
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do HppGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "hppgen: %s\n" "$1"
+}
+
+error() {
+    printf "hppgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    CXX_EXEC=""
+    if command -v g++ >/dev/null 2>&1; then
+        CXX_EXEC="g++"
+    elif command -v clang++ >/dev/null 2>&1; then
+        CXX_EXEC="clang++"
+    fi
+
+    if [ -n "$CXX_EXEC" ]; then
+        log "Validando '$val_file' com $CXX_EXEC..."
+        if "$CXX_EXEC" -fsyntax-only "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe C++ (Header)."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+HppGen v$VERSION – Gerador de C++ Header Files
+
+Uso:
+  hppgen <comando> [opções]
+
+Comandos:
+  init <arquivo.hpp>        Cria um novo arquivo de cabeçalho C++ com layout base.
+  add <arquivo.hpp> <mod>   Adiciona um módulo funcional ao arquivo.
+  list                      Lista os módulos disponíveis.
+  help                      Mostra esta ajuda.
+
+Módulos disponíveis:
+  guard      Include guards padrão (já incluído no init).
+  iostream   Inclusão de <iostream>.
+  string     Inclusão de <string>.
+  vector     Inclusão de <vector>.
+  namespace  Estrutura básica de namespace.
+
+Exemplo:
+  hppgen init meu_header.hpp
+  hppgen add meu_header.hpp namespace
+EOF
+}
+
+# --- Templates de Módulos Header ---
+
+get_mod_base() {
+    guard_name=$(basename "${file:-header.hpp}" | tr '[:lower:].' '[:upper:]_')
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-header.hpp}")
+ * Descrição: [Descreva a finalidade deste cabeçalho aqui]
+ * Gerado por: HppGen (C++ Header Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+#ifndef ${guard_name}_
+#define ${guard_name}_
+
+/* --- Definições / Classes --- */
+
+#endif /* ${guard_name}_ */
+EOF
+}
+
+get_mod_namespace() {
+    cat <<EOF
+
+namespace MyNamespace {
+
+class MyClass {
+public:
+    MyClass() = default;
+    ~MyClass() = default;
+};
+
+} // namespace MyNamespace
+EOF
+}
+
+get_mod_iostream() {
+    cat <<EOF
+#include <iostream>
+EOF
+}
+
+get_mod_string() {
+    cat <<EOF
+#include <string>
+EOF
+}
+
+get_mod_vector() {
+    cat <<EOF
+#include <vector>
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Header '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'hppgen init' primeiro."
+
+    case "$mod" in
+        namespace) code=$(get_mod_namespace) ; anchor="/* --- Definições / Classes --- */" ;;
+        iostream)  code=$(get_mod_iostream)  ; anchor="#define" ;;
+        string)    code=$(get_mod_string)    ; anchor="#define" ;;
+        vector)    code=$(get_mod_vector)    ; anchor="#define" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        case "$line" in
+            *"$anchor"*)
+                if [ "$inserted" = false ]; then
+                    printf "%s\n" "$code" >> "$tmp_edit"
+                    inserted=true
+                fi
+                ;;
+        esac
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no HppGen:\n"
+    printf "  - guard     : Include guards padrão\n"
+    printf "  - iostream  : Inclusão de <iostream>\n"
+    printf "  - string    : Inclusão de <string>\n"
+    printf "  - vector    : Inclusão de <vector>\n"
+    printf "  - namespace : Estrutura de namespace e classe básica\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

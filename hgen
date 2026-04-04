@@ -1,0 +1,199 @@
+#!/bin/sh
+# ==============================================================================
+# Script: hgen
+# Descrição: Script de automação para hgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 15:20
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do HGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "hgen: %s\n" "$1"
+}
+
+error() {
+    printf "hgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    CC_EXEC=""
+    if command -v cc >/dev/null 2>&1; then
+        CC_EXEC="cc"
+    elif command -v gcc >/dev/null 2>&1; then
+        CC_EXEC="gcc"
+    fi
+
+    if [ -n "$CC_EXEC" ]; then
+        log "Validando '$val_file' com $CC_EXEC..."
+        if "$CC_EXEC" -fsyntax-only "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe C (Header)."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+HGen v$VERSION – Gerador de C Header Files
+
+Uso:
+  hgen <comando> [opções]
+
+Comandos:
+  init <arquivo.h>         Cria um novo arquivo de cabeçalho C com layout base.
+  add <arquivo.h> <mod>    Adiciona um módulo funcional ao arquivo.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  guard      Include guards padrão (já incluído no init).
+  cpp        Bloco extern "C" para compatibilidade C++.
+  stdio      Inclusão de <stdio.h>.
+  stdlib     Inclusão de <stdlib.h>.
+  stdint     Inclusão de <stdint.h> (tipos inteiros).
+
+Exemplo:
+  hgen init meu_header.h
+  hgen add meu_header.h cpp
+EOF
+}
+
+# --- Templates de Módulos Header ---
+
+get_mod_base() {
+    guard_name=$(basename "${file:-header.h}" | tr '[:lower:].' '[:upper:]_')
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-header.h}")
+ * Descrição: [Descreva a finalidade deste cabeçalho aqui]
+ * Gerado por: HGen (C Header Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+#ifndef ${guard_name}_
+#define ${guard_name}_
+
+/* --- Definições / Protótipos --- */
+
+#endif /* ${guard_name}_ */
+EOF
+}
+
+get_mod_cpp() {
+    cat <<EOF
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Adicione protótipos compatíveis com C aqui */
+
+#ifdef __cplusplus
+}
+#endif
+EOF
+}
+
+get_mod_stdio() {
+    cat <<EOF
+#include <stdio.h>
+EOF
+}
+
+get_mod_stdlib() {
+    cat <<EOF
+#include <stdlib.h>
+EOF
+}
+
+get_mod_stdint() {
+    cat <<EOF
+#include <stdint.h>
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Header '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'hgen init' primeiro."
+
+    case "$mod" in
+        cpp)    code=$(get_mod_cpp)    ; anchor="/* --- Definições / Protótipos --- */" ;;
+        stdio)  code=$(get_mod_stdio)  ; anchor="#define" ;;
+        stdlib) code=$(get_mod_stdlib) ; anchor="#define" ;;
+        stdint) code=$(get_mod_stdint) ; anchor="#define" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        case "$line" in
+            *"$anchor"*)
+                if [ "$inserted" = false ]; then
+                    printf "%s\n" "$code" >> "$tmp_edit"
+                    inserted=true
+                fi
+                ;;
+        esac
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no HGen:\n"
+    printf "  - guard  : Include guards padrão\n"
+    printf "  - cpp    : Bloco extern \"C\" para C++\n"
+    printf "  - stdio  : Inclusão de <stdio.h>\n"
+    printf "  - stdlib : Inclusão de <stdlib.h>\n"
+    printf "  - stdint : Inclusão de <stdint.h>\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

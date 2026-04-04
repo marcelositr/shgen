@@ -1,0 +1,206 @@
+#!/bin/sh
+# ==============================================================================
+# Script: fsgen
+# Descrição: Script de automação para fsgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 18:10
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do FsGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "fsgen: %s\n" "$1"
+}
+
+error() {
+    printf "fsgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    FS_EXEC=""
+    if command -v dotnet >/dev/null 2>&1; then
+        FS_EXEC="dotnet fsi"
+    fi
+
+    if [ -n "$FS_EXEC" ]; then
+        log "Validando '$val_file' com $FS_EXEC..."
+        # dotnet fsi não tem flag -c, apenas checamos existência
+        log "Validação concluída (apenas existência de interpretador)."
+    fi
+}
+
+usage() {
+    cat <<EOF
+FsGen v$VERSION – Gerador de F# Scripts (via Shell Wrapper)
+
+Uso:
+  fsgen <comando> [opções]
+
+Comandos:
+  init <arquivo.fs>        Cria um novo script F# com wrapper shell.
+  add <arquivo.fs> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  io      Operações de entrada/saída (System.IO).
+  async   Programação assíncrona (async { }).
+  printf  Saída formatada (printfn).
+  net     Rede e HTTP (System.Net.Http).
+
+Exemplo:
+  fsgen init meu_script.fs
+  fsgen add meu_script.fs io
+EOF
+}
+
+# --- Templates de Módulos F# ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.fs}")
+# Descrição: [Script Shell que executa código F#]
+# Gerado por: FsGen (Shell Wrapper para F#)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+(*
+exec dotnet fsi "\$0" "\$@"
+*)
+
+// --- Início do Código F# ---
+
+open System
+
+// -- MODULE_IMPORTS --
+
+let main args =
+    let progName = AppDomain.CurrentDomain.FriendlyName
+    printfn "[%s] Iniciando execução via F#..." progName
+    // Adicione sua lógica aqui
+    0
+
+// -- MODULE_FUNCTIONS --
+
+main fsi.CommandLineArgs
+EOF
+}
+
+# --- Definições de Módulos F# ---
+
+# io
+mod_io_imp='open System.IO'
+mod_io_code='
+let checkFile path =
+    File.Exists(path) |> printfn "Arquivo existe: %b"'
+
+# async
+mod_async_imp=''
+mod_async_code='
+let asyncExample () =
+    async {
+        do! Async.Sleep 1000
+        printfn "Finalizado após 1 segundo."
+    } |> Async.RunSynchronously'
+
+# printf
+mod_printf_imp=''
+mod_printf_code='
+let logMsg msg =
+    printfn "LOG: %s" msg'
+
+# net
+mod_net_imp='open System.Net.Http'
+mod_net_code='
+let httpExample () =
+    use client = new HttpClient()
+    let response = client.GetStringAsync("https://api.github.com") |> Async.AwaitTask |> Async.RunSynchronously
+    printfn "Response length: %d" response.Length'
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'fsgen init' primeiro."
+
+    case "$mod" in
+        io)     imp=$mod_io_imp     ; code=$mod_io_code ;;
+        async)  imp=$mod_async_imp  ; code=$mod_async_code ;;
+        printf) imp=$mod_printf_imp ; code=$mod_printf_code ;;
+        net)    imp=$mod_net_imp    ; code=$mod_net_code ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted_imp=false
+    inserted_code=false
+    while IFS= read -r line; do
+        if [ "$line" = "// -- MODULE_IMPORTS --" ] && [ "$inserted_imp" = false ]; then
+            if [ -n "$imp" ]; then
+                printf "%s\n" "$imp" >> "$tmp_edit"
+            fi
+            inserted_imp=true
+        fi
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "// -- MODULE_FUNCTIONS --" ] && [ "$inserted_code" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted_code=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no FsGen:\n"
+    printf "  - io     : Operações de entrada/saída\n"
+    printf "  - async  : Programação assíncrona\n"
+    printf "  - printf : Saída formatada\n"
+    printf "  - net    : Rede e HTTP\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

@@ -1,0 +1,208 @@
+#!/bin/sh
+# ==============================================================================
+# Script: nimgen
+# Descrição: Script de automação para nimgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 17:30
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do NimGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "nimgen: %s\n" "$1"
+}
+
+error() {
+    printf "nimgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    NIM_EXEC=""
+    if command -v nim >/dev/null 2>&1; then
+        NIM_EXEC="nim"
+    fi
+
+    if [ -n "$NIM_EXEC" ]; then
+        log "Validando '$val_file' com $NIM_EXEC check..."
+        if "$NIM_EXEC" check "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe Nim."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+NimGen v$VERSION – Gerador de Nim Scripts (via Shell Wrapper)
+
+Uso:
+  nimgen <comando> [opções]
+
+Comandos:
+  init <arquivo.nim>        Cria um novo script Nim com wrapper shell.
+  add <arquivo.nim> <mod>   Adiciona um módulo funcional ao script.
+  list                      Lista os módulos disponíveis.
+  help                      Mostra esta ajuda.
+
+Módulos disponíveis:
+  os          Acesso a argumentos e sistema (import os).
+  strutils    Manipulação de strings (import strutils).
+  json        Trabalho com JSON (import json).
+  httpclient  Cliente HTTP (import httpclient).
+
+Exemplo:
+  nimgen init meu_script.nim
+  nimgen add meu_script.nim os
+EOF
+}
+
+# --- Templates de Módulos Nim ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.nim}")
+# Descrição: [Script Shell que executa código Nim]
+# Gerado por: NimGen (Shell Wrapper para Nim)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+#[
+exec nim r "\$0" "\$@"
+]#
+
+# --- Início do Código Nim ---
+
+# --- Constantes Globais ---
+let progName = getAppFilename().extractFilename()
+
+# --- Procedimentos / Funções ---
+
+proc main() =
+  echo "[\$progName] Iniciando execução via Nim..."
+  # Adicione sua lógica aqui
+
+# --- Execução Principal ---
+if isMainModule:
+  main()
+EOF
+}
+
+get_mod_os() {
+    cat <<EOF
+
+import os
+# --- Módulo OS ---
+proc printArgs() =
+  echo "Argumentos: ", commandLineParams()
+EOF
+}
+
+get_mod_strutils() {
+    cat <<EOF
+
+import strutils
+# --- Módulo StrUtils ---
+# let upper = "hello".toUpperAscii()
+EOF
+}
+
+get_mod_json() {
+    cat <<EOF
+
+import json
+# --- Módulo JSON ---
+# let data = parseJson("{\"key\": \"value\"}")
+EOF
+}
+
+get_mod_httpclient() {
+    cat <<EOF
+
+import httpclient
+# --- Módulo HttpClient ---
+# let client = newHttpClient()
+# echo client.getContent("https://api.github.com")
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'nimgen init' primeiro."
+
+    case "$mod" in
+        os)         code=$(get_mod_os)         ; anchor="# --- Início do Código Nim ---" ;;
+        strutils)   code=$(get_mod_strutils)   ; anchor="# --- Início do Código Nim ---" ;;
+        json)       code=$(get_mod_json)       ; anchor="# --- Início do Código Nim ---" ;;
+        httpclient) code=$(get_mod_httpclient) ; anchor="# --- Início do Código Nim ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "$anchor" ] && [ "$inserted" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no NimGen:\n"
+    printf "  - os         : Acesso a argumentos e sistema\n"
+    printf "  - strutils   : Manipulação de strings\n"
+    printf "  - json       : Trabalho com JSON\n"
+    printf "  - httpclient : Cliente HTTP\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

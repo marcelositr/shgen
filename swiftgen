@@ -1,0 +1,177 @@
+#!/bin/sh
+# ==============================================================================
+# Script: swiftgen
+# Descrição: Script de automação para swiftgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 16:50
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do SwiftGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "swiftgen: %s\n" "$1"
+}
+
+error() {
+    printf "swiftgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    SWIFT_EXEC=""
+    if command -v swiftc >/dev/null 2>&1; then
+        SWIFT_EXEC="swiftc"
+    fi
+
+    if [ -n "$SWIFT_EXEC" ]; then
+        log "Validando '$val_file' com $SWIFT_EXEC..."
+        # swiftc -o /dev/null -D SYNTAX_CHECK
+        if "$SWIFT_EXEC" -o /dev/null "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe Swift."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+SwiftGen v$VERSION – Gerador de Swift Scripts
+
+Uso:
+  swiftgen <comando> [opções]
+
+Comandos:
+  init <arquivo.swift>      Cria um novo arquivo Swift com layout base.
+  add <arquivo.swift> <mod> Adiciona um módulo funcional ao arquivo.
+  list                      Lista os módulos disponíveis.
+  help                      Mostra esta ajuda.
+
+Módulos disponíveis:
+  foundation Inclusão do framework Foundation.
+  args       Acesso a argumentos da linha de comando (CommandLine).
+  file       Operações de arquivo via FileManager.
+  json       Manipulação de JSON via JSONDecoder/JSONEncoder.
+
+Exemplo:
+  swiftgen init meu_script.swift
+  swiftgen add meu_script.swift foundation
+EOF
+}
+
+# --- Templates de Módulos Swift ---
+
+get_mod_base() {
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-script.swift}")
+ * Descrição: [Descreva a finalidade deste script aqui]
+ * Gerado por: SwiftGen (Swift Script Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+import Foundation
+
+print("[PROGNAME] Iniciando execução...")
+
+// Adicione sua lógica aqui
+EOF
+}
+
+# --- Definições de Módulos Swift ---
+
+# args
+mod_args_code='
+/* --- Módulo Args --- */
+func printArgs() {
+    let args = CommandLine.arguments
+    print("Argumentos: \(args)")
+}
+printArgs()'
+
+# file
+mod_file_code='
+/* --- Módulo File --- */
+func checkFile(path: String) -> Bool {
+    return FileManager.default.fileExists(atPath: path)
+}
+print("Arquivo existe: \(checkFile(path: \"test.txt\"))")'
+
+# json
+mod_json_code='
+/* --- Módulo JSON --- */
+struct MyData: Codable {
+    let name: String
+    let value: Int
+}
+// let decoder = JSONDecoder()
+// let data = try? decoder.decode(MyData.self, from: jsonData)'
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Arquivo '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'swiftgen init' primeiro."
+
+    case "$mod" in
+        args)       code=$mod_args_code ;;
+        file)       code=$mod_file_code ;;
+        json)       code=$mod_json_code ;;
+        foundation) code="import Foundation" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    # Swift scripts não precisam de âncoras complexas, anexa ao final
+    cat <<EOF >> "$file"
+$code
+EOF
+    
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no SwiftGen:\n"
+    printf "  - foundation : Inclusão do framework Foundation\n"
+    printf "  - args       : Acesso a argumentos da linha de comando\n"
+    printf "  - file       : Operações de arquivo via FileManager\n"
+    printf "  - json       : Manipulação de JSON\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

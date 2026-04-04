@@ -1,0 +1,213 @@
+#!/bin/sh
+# ==============================================================================
+# Script: crgen
+# Descrição: Script de automação para crgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 17:40
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do CrGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "crgen: %s\n" "$1"
+}
+
+error() {
+    printf "crgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    CR_EXEC=""
+    if command -v crystal >/dev/null 2>&1; then
+        CR_EXEC="crystal"
+    fi
+
+    if [ -n "$CR_EXEC" ]; then
+        log "Validando '$val_file' com $CR_EXEC tool format..."
+        # crystal tool format checa a sintaxe
+        if "$CR_EXEC" tool format --check "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe Crystal."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+CrGen v$VERSION – Gerador de Crystal Scripts (via Shell Wrapper)
+
+Uso:
+  crgen <comando> [opções]
+
+Comandos:
+  init <arquivo.cr>        Cria um novo script Crystal com wrapper shell.
+  add <arquivo.cr> <mod>   Adiciona um módulo funcional ao script.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis:
+  logger    Configuração de log padrão (require "logger").
+  optparse  Parsing de argumentos (require "option_parser").
+  http      Cliente HTTP (require "http/client").
+  json      Trabalho com JSON (require "json").
+
+Exemplo:
+  crgen init meu_script.cr
+  crgen add meu_script.cr logger
+EOF
+}
+
+# --- Templates de Módulos Crystal ---
+
+get_mod_base() {
+    cat <<EOF
+#!/bin/sh
+# ==============================================================================
+# Script: $(basename "${file:-script.cr}")
+# Descrição: [Script Shell que executa código Crystal]
+# Gerado por: CrGen (Shell Wrapper para Crystal)
+# Data: $(date '+%Y-%m-%d %H:%M')
+# ==============================================================================
+
+exec crystal run "\$0" "\$@"
+#!crystal
+
+# --- Início do Código Crystal ---
+
+# --- Constantes Globais ---
+PROGNAME = File.basename(PROGRAM_NAME)
+
+# --- Métodos ---
+
+def main
+  puts "[#{PROGNAME}] Iniciando execução via Crystal..."
+  # Adicione sua lógica aqui
+end
+
+# --- Execução Principal ---
+main
+EOF
+}
+
+get_mod_logger() {
+    cat <<EOF
+
+require "logger"
+# --- Módulo Logger ---
+logger = Logger.new(STDOUT)
+logger.level = Logger::Severity::INFO
+EOF
+}
+
+get_mod_optparse() {
+    cat <<EOF
+
+require "option_parser"
+# --- Módulo OptionParser ---
+options = {} of String => Bool
+OptionParser.parse do |parser|
+  parser.banner = "Uso: #{PROGNAME} [opções]"
+  parser.on("-v", "--verbose", "Execução detalhada") { options["verbose"] = true }
+  parser.on("-h", "--help", "Mostra ajuda") { puts parser; exit }
+end
+EOF
+}
+
+get_mod_http() {
+    cat <<EOF
+
+require "http/client"
+# --- Módulo HTTP ---
+# response = HTTP::Client.get "https://api.github.com"
+# puts response.body
+EOF
+}
+
+get_mod_json() {
+    cat <<EOF
+
+require "json"
+# --- Módulo JSON ---
+# data = JSON.parse("{\"key\": \"value\"}")
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    chmod +x "$file"
+    log "Script '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'crgen init' primeiro."
+
+    case "$mod" in
+        logger)   code=$(get_mod_logger)   ; anchor="# --- Início do Código Crystal ---" ;;
+        optparse) code=$(get_mod_optparse) ; anchor="# --- Início do Código Crystal ---" ;;
+        http)     code=$(get_mod_http)     ; anchor="# --- Início do Código Crystal ---" ;;
+        json)     code=$(get_mod_json)     ; anchor="# --- Início do Código Crystal ---" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "$anchor" ] && [ "$inserted" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    chmod +x "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no CrGen:\n"
+    printf "  - logger   : Configuração de log padrão\n"
+    printf "  - optparse : Parsing de argumentos CLI\n"
+    printf "  - http     : Cliente HTTP\n"
+    printf "  - json     : Trabalho com JSON\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

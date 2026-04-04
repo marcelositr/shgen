@@ -1,0 +1,211 @@
+#!/bin/sh
+# ==============================================================================
+# Script: gogen
+# Descrição: Script de automação para gogen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 15:55
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do GoGen
+VERSION="1.0.1"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "gogen: %s\n" "$1"
+}
+
+error() {
+    printf "gogen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    GO_EXEC=""
+    if command -v go >/dev/null 2>&1; then
+        GO_EXEC="go"
+    fi
+
+    if [ -n "$GO_EXEC" ]; then
+        log "Validando '$val_file' com $GO_EXEC..."
+        if "$GO_EXEC" vet "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe Go."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+GoGen v$VERSION – Gerador de Go Scripts
+
+Uso:
+  gogen <comando> [opções]
+
+Comandos:
+  init <arquivo.go>         Cria um novo arquivo Go com layout base.
+  add <arquivo.go> <mod>    Adiciona um módulo funcional ao arquivo.
+  list                      Lista os módulos disponíveis.
+  help                      Mostra esta ajuda.
+
+Módulos disponíveis:
+  os       Acesso a argumentos e sistema (pacote os).
+  flag     Parsing robusto de argumentos (pacote flag).
+  http     Boilerplate de servidor HTTP (pacote net/http).
+  file     Operações de leitura de arquivo (pacote os, io).
+
+Exemplo:
+  gogen init meu_script.go
+  gogen add meu_script.go flag
+EOF
+}
+
+# --- Templates de Módulos Go ---
+
+get_mod_base() {
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-script.go}")
+ * Descrição: [Descreva a finalidade deste script aqui]
+ * Gerado por: GoGen (Go Script Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+package main
+
+import (
+	"fmt"
+	// -- MODULE_IMPORTS --
+)
+
+// -- MODULE_FUNCTIONS --
+
+func main() {
+	fmt.Printf("[%s] Iniciando execução...\n", "PROGNAME")
+
+	// Adicione sua lógica aqui
+}
+EOF
+}
+
+# --- Definições de Módulos (Separados em Import e Code) ---
+
+# os
+mod_os_imp='"os"'
+mod_os_code='
+func checkArgs() {
+	args := os.Args
+	fmt.Printf("Argumentos: %v\\n", args)
+}'
+
+# flag
+mod_flag_imp='"flag"'
+mod_flag_code='
+func parseFlags() {
+	verbose := flag.Bool("v", false, "Ativar modo detalhado")
+	flag.Parse()
+	fmt.Printf("Verbose: %v\\n", *verbose)
+}'
+
+# http
+mod_http_imp='"net/http"'
+mod_http_code='
+func startServer() {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "Olá do Go!")
+	})
+	// http.ListenAndServe(":8080", nil)
+}'
+
+# file
+mod_file_imp='"os"\n\t"io"'
+mod_file_code='
+func readFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}'
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Arquivo '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'gogen init' primeiro."
+
+    case "$mod" in
+        os)   imp=$mod_os_imp   ; code=$mod_os_code ;;
+        flag) imp=$mod_flag_imp ; code=$mod_flag_code ;;
+        http) imp=$mod_http_imp ; code=$mod_http_code ;;
+        file) imp=$mod_file_imp ; code=$mod_file_code ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted_imp=false
+    inserted_code=false
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "	// -- MODULE_IMPORTS --" ] && [ "$inserted_imp" = false ]; then
+            printf "\t%b\n" "$imp" >> "$tmp_edit"
+            inserted_imp=true
+        fi
+        if [ "$line" = "// -- MODULE_FUNCTIONS --" ] && [ "$inserted_code" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted_code=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no GoGen:\n"
+    printf "  - os   : Acesso a argumentos e sistema\n"
+    printf "  - flag : Parsing robusto de argumentos\n"
+    printf "  - http : Boilerplate de servidor HTTP\n"
+    printf "  - file : Operações de leitura de arquivo\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

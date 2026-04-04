@@ -1,0 +1,228 @@
+#!/bin/sh
+# ==============================================================================
+# Script: ziggen
+# Descrição: Script de automação para ziggen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 16:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do ZigGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "ziggen: %s\n" "$1"
+}
+
+error() {
+    printf "ziggen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    ZIG_EXEC=""
+    if command -v zig >/dev/null 2>&1; then
+        ZIG_EXEC="zig"
+    fi
+
+    if [ -n "$ZIG_EXEC" ]; then
+        log "Validando '$val_file' com $ZIG_EXEC..."
+        # zig test ou zig build-exe --name /dev/null
+        if "$ZIG_EXEC" build-obj "$val_file" --name /dev/null >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+            rm -f /dev/null.o
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe Zig."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+ZigGen v$VERSION – Gerador de Zig Scripts
+
+Uso:
+  ziggen <comando> [opções]
+
+Comandos:
+  init <arquivo.zig>        Cria um novo arquivo Zig com layout base.
+  add <arquivo.zig> <mod>   Adiciona um módulo funcional ao arquivo.
+  list                      Lista os módulos disponíveis.
+  help                      Mostra esta ajuda.
+
+Módulos disponíveis:
+  args       Parsing de argumentos (std.process.args).
+  fs         Operações de sistema de arquivos (std.fs).
+  io         Entrada e saída (std.io).
+  alloc      Exemplo de uso de alocador (std.mem.Allocator).
+  test       Bloco de teste básico (test "...").
+
+Exemplo:
+  ziggen init meu_script.zig
+  ziggen add meu_script.zig args
+EOF
+}
+
+# --- Templates de Módulos Zig ---
+
+get_mod_base() {
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-script.zig}")
+ * Descrição: [Descreva a finalidade deste script aqui]
+ * Gerado por: ZigGen (Zig Script Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+const std = @import("std");
+
+pub fn main() !void {
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("[{s}] Iniciando execução...\\n", .{"PROGNAME"});
+
+    // Adicione sua lógica aqui
+}
+EOF
+}
+
+get_mod_args() {
+    cat <<EOF
+
+/* --- Módulo Args --- */
+fn parse_args(allocator: std.mem.Allocator) !void {
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+    while (args.next()) |arg| {
+        std.debug.print("Arg: {s}\\n", .{arg});
+    }
+}
+EOF
+}
+
+get_mod_fs() {
+    cat <<EOF
+
+/* --- Módulo FS --- */
+fn check_file(path: []const u8) bool {
+    std.fs.cwd().access(path, .{}) catch return false;
+    return true;
+}
+EOF
+}
+
+get_mod_io() {
+    cat <<EOF
+
+/* --- Módulo IO --- */
+fn read_line(buffer: []u8) !?[]const u8 {
+    const stdin = std.io.getStdIn().reader();
+    return try stdin.readUntilDelimiterOrEof(buffer, '\\n');
+}
+EOF
+}
+
+get_mod_alloc() {
+    cat <<EOF
+
+/* --- Módulo Allocator --- */
+fn alloc_example() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    const bytes = try allocator.alloc(u8, 100);
+    defer allocator.free(bytes);
+}
+EOF
+}
+
+get_mod_test() {
+    cat <<EOF
+
+test "basic test" {
+    try std.testing.expectEqual(10, 5 + 5);
+}
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Arquivo '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'ziggen init' primeiro."
+
+    case "$mod" in
+        args)  code=$(get_mod_args)  ; anchor="pub fn main()" ;;
+        fs)    code=$(get_mod_fs)    ; anchor="pub fn main()" ;;
+        io)    code=$(get_mod_io)    ; anchor="pub fn main()" ;;
+        alloc) code=$(get_mod_alloc) ; anchor="pub fn main()" ;;
+        test)  code=$(get_mod_test)  ; anchor="" ;; # Final do arquivo
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        if [ -n "$anchor" ] && [ "$line" = "$anchor" ] && [ "$inserted" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+        printf "%s\n" "$line" >> "$tmp_edit"
+    done < "$file"
+    
+    if [ "$inserted" = false ]; then
+        printf "%s\n" "$code" >> "$tmp_edit"
+    fi
+
+    mv "$tmp_edit" "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no ZigGen:\n"
+    printf "  - args  : Parsing de argumentos (std.process.args)\n"
+    printf "  - fs    : Operações de sistema de arquivos (std.fs)\n"
+    printf "  - io    : Entrada e saída (std.io)\n"
+    printf "  - alloc : Exemplo de uso de alocador (std.mem.Allocator)\n"
+    printf "  - test  : Bloco de teste básico (test \"...\")\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

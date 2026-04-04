@@ -1,0 +1,267 @@
+#!/bin/sh
+# ==============================================================================
+# Script: cppgen
+# Descrição: Script de automação para cppgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 15:10
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do CppGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "cppgen: %s\n" "$1"
+}
+
+error() {
+    printf "cppgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    CXX_EXEC=""
+    if command -v g++ >/dev/null 2>&1; then
+        CXX_EXEC="g++"
+    elif command -v clang++ >/dev/null 2>&1; then
+        CXX_EXEC="clang++"
+    fi
+
+    if [ -n "$CXX_EXEC" ]; then
+        log "Validando '$val_file' com $CXX_EXEC..."
+        # Tenta validar com C++17 por causa do módulo filesystem
+        if "$CXX_EXEC" -std=c++17 -fsyntax-only "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe C++."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+CppGen v$VERSION – Gerador de C++ Scripts
+
+Uso:
+  cppgen <comando> [opções]
+
+Comandos:
+  init <arquivo.cpp>        Cria um novo arquivo C++ com layout base.
+  add <arquivo.cpp> <mod>   Adiciona um módulo funcional ao arquivo.
+  list                      Lista os módulos disponíveis.
+  help                      Mostra esta ajuda.
+
+Módulos disponíveis (baseados em cgen):
+  cleanup    Gestão de limpeza via std::atexit ou RAII.
+  check_f    Verificação de arquivos via std::filesystem.
+  getopt     Parsing de argumentos via getopt.h.
+  root       Verificação de root (geteuid).
+  loop       Iteração de diretório via std::filesystem.
+  vector     Exemplo de uso de std::vector.
+
+Exemplo:
+  cppgen init meu_projeto.cpp
+  cppgen add meu_projeto.cpp filesystem
+EOF
+}
+
+# --- Templates de Módulos C++ ---
+
+get_mod_base() {
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-script.cpp}")
+ * Descrição: [Descreva a finalidade do script aqui]
+ * Gerado por: CppGen (C++ Script Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+#include <iostream>
+#include <string>
+
+/* --- Funções Auxiliares --- */
+
+void log_msg(const std::string& msg) {
+    std::cout << "[" << "PROGNAME" << "] " << msg << std::endl;
+}
+
+/* --- Lógica Principal --- */
+
+int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+
+    log_msg("Iniciando execução...");
+    
+    /* Adicione sua lógica aqui */
+
+    return 0;
+}
+EOF
+}
+
+get_mod_cleanup() {
+    cat <<EOF
+
+#include <cstdlib>
+/* --- Módulo Cleanup --- */
+void cleanup() {
+    std::cout << "Limpando recursos..." << std::endl;
+}
+/* No main: std::atexit(cleanup); */
+EOF
+}
+
+get_mod_check_f() {
+    cat <<EOF
+
+#include <filesystem>
+namespace fs = std::filesystem;
+/* --- Módulo Check File --- */
+bool check_file(const std::string& path) {
+    return fs::exists(path);
+}
+EOF
+}
+
+get_mod_getopt() {
+    cat <<EOF
+
+#include <getopt.h>
+/* --- Módulo Getopt --- */
+void parse_args(int argc, char* argv[]) {
+    int opt;
+    while ((opt = getopt(argc, argv, "hv")) != -1) {
+        switch (opt) {
+            case 'h': std::cout << "Ajuda..." << std::endl; std::exit(0);
+            case 'v': std::cout << "Versão 1.0.0" << std::endl; std::exit(0);
+            default: std::exit(1);
+        }
+    }
+}
+EOF
+}
+
+get_mod_root() {
+    cat <<EOF
+
+#include <unistd.h>
+#include <sys/types.h>
+/* --- Módulo Root Check --- */
+void check_root() {
+    if (geteuid() == 0) {
+        std::cout << "Aviso: Rodando como root." << std::endl;
+    }
+}
+EOF
+}
+
+get_mod_loop() {
+    cat <<EOF
+
+#include <filesystem>
+namespace fs = std::filesystem;
+/* --- Módulo Loop de Diretório --- */
+void list_dir(const std::string& path) {
+    if (!fs::exists(path)) return;
+    for (const auto& entry : fs::directory_iterator(path)) {
+        std::cout << entry.path() << std::endl;
+    }
+}
+EOF
+}
+
+get_mod_vector() {
+    cat <<EOF
+
+#include <vector>
+#include <algorithm>
+/* --- Módulo Vector --- */
+void vector_example() {
+    std::vector<std::string> items = {"item1", "item2", "item3"};
+    for (const auto& item : items) {
+        std::cout << "Item: " << item << std::endl;
+    }
+}
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Arquivo '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'cppgen init' primeiro."
+
+    case "$mod" in
+        cleanup) code=$(get_mod_cleanup) ; anchor="/* --- Funções Auxiliares --- */" ;;
+        check_f) code=$(get_mod_check_f) ; anchor="/* --- Funções Auxiliares --- */" ;;
+        getopt)  code=$(get_mod_getopt)  ; anchor="/* --- Funções Auxiliares --- */" ;;
+        root)    code=$(get_mod_root)    ; anchor="/* --- Funções Auxiliares --- */" ;;
+        loop)    code=$(get_mod_loop)    ; anchor="/* --- Funções Auxiliares --- */" ;;
+        vector)  code=$(get_mod_vector)  ; anchor="/* --- Funções Auxiliares --- */" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "$anchor" ] && [ "$inserted" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no CppGen:\n"
+    printf "  - cleanup : Gestão de limpeza via std::atexit ou RAII\n"
+    printf "  - check_f : Verificação de arquivos via std::filesystem\n"
+    printf "  - getopt  : Parsing de argumentos via getopt.h\n"
+    printf "  - root    : Verificação de root (geteuid)\n"
+    printf "  - loop    : Iteração de diretório via std::filesystem\n"
+    printf "  - vector  : Exemplo de uso de std::vector\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

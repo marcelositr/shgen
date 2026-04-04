@@ -1,0 +1,204 @@
+#!/bin/sh
+# ==============================================================================
+# Script: dartgen
+# Descrição: Script de automação para dartgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 17:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do DartGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "dartgen: %s\n" "$1"
+}
+
+error() {
+    printf "dartgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    DART_EXEC=""
+    if command -v dart >/dev/null 2>&1; then
+        DART_EXEC="dart"
+    fi
+
+    if [ -n "$DART_EXEC" ]; then
+        log "Validando '$val_file' com $DART_EXEC..."
+        if "$DART_EXEC" analyze "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe Dart."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+DartGen v$VERSION – Gerador de Dart Scripts
+
+Uso:
+  dartgen <comando> [opções]
+
+Comandos:
+  init <arquivo.dart>       Cria um novo arquivo Dart com layout base.
+  add <arquivo.dart> <mod>  Adiciona um módulo funcional ao arquivo.
+  list                      Lista os módulos disponíveis.
+  help                      Mostra esta ajuda.
+
+Módulos disponíveis:
+  io      Operações de entrada/saída (import 'dart:io').
+  convert Conversão de dados e JSON (import 'dart:convert').
+  async   Programação assíncrona (import 'dart:async').
+  args    Exemplo de processamento de argumentos.
+
+Exemplo:
+  dartgen init meu_script.dart
+  dartgen add meu_script.dart io
+EOF
+}
+
+# --- Templates de Módulos Dart ---
+
+get_mod_base() {
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-script.dart}")
+ * Descrição: [Descreva a finalidade deste script aqui]
+ * Gerado por: DartGen (Dart Script Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+// -- MODULE_IMPORTS --
+
+void main(List<String> args) {
+  print("[PROGNAME] Iniciando execução...");
+
+  // Adicione sua lógica aqui
+}
+
+// -- MODULE_FUNCTIONS --
+EOF
+}
+
+# --- Definições de Módulos Dart ---
+
+# io
+mod_io_imp="import 'dart:io';"
+mod_io_code="
+void checkFile(String path) {
+  final file = File(path);
+  print(\"Arquivo existe: \${file.existsSync()}\");
+}"
+
+# convert
+mod_convert_imp="import 'dart:convert';"
+mod_convert_code="
+void jsonExample() {
+  final jsonStr = \"{\\\"key\\\": \\\"value\\\"}\";
+  final data = jsonDecode(jsonStr);
+  print(\"JSON: \$data\");
+}"
+
+# async
+mod_async_imp="import 'dart:async';"
+mod_async_code='
+Future<void> asyncExample() async {
+  await Future.delayed(Duration(seconds: 1));
+  print("Finalizado após 1 segundo.");
+}'
+
+# args
+mod_args_imp=""
+mod_args_code="
+void printArgs(List<String> args) {
+  for (var i = 0; i < args.length; i++) {
+    print(\"Arg \$i: \${args[i]}\");
+  }
+}"
+
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Arquivo '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'dartgen init' primeiro."
+
+    case "$mod" in
+        io)      imp=$mod_io_imp      ; code=$mod_io_code ;;
+        convert) imp=$mod_convert_imp ; code=$mod_convert_code ;;
+        async)   imp=$mod_async_imp   ; code=$mod_async_code ;;
+        args)    imp=$mod_args_imp    ; code=$mod_args_code ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted_imp=false
+    inserted_code=false
+    while IFS= read -r line; do
+        if [ "$line" = "// -- MODULE_IMPORTS --" ] && [ "$inserted_imp" = false ]; then
+            if [ -n "$imp" ]; then
+                printf "%s\n" "$imp" >> "$tmp_edit"
+            fi
+            inserted_imp=true
+        fi
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "// -- MODULE_FUNCTIONS --" ] && [ "$inserted_code" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted_code=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no DartGen:\n"
+    printf "  - io      : Operações de entrada/saída (dart:io)\n"
+    printf "  - convert : Conversão de dados e JSON (dart:convert)\n"
+    printf "  - async   : Programação assíncrona (dart:async)\n"
+    printf "  - args    : Exemplo de processamento de argumentos\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac

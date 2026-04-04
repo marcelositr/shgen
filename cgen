@@ -1,0 +1,252 @@
+#!/bin/sh
+# ==============================================================================
+# Script: cgen
+# Descrição: Script de automação para cgen
+# Gerado por: Gemini CLI
+# Data: 2026-04-04 15:00
+# ==============================================================================
+
+set -eu
+
+# IFS seguro (quebra de linha apenas)
+IFS='
+'
+
+# Versão do CGen
+VERSION="1.0.0"
+
+# --- Funções Auxiliares do Gerador ---
+
+log() {
+    printf "cgen: %s\n" "$1"
+}
+
+error() {
+    printf "cgen erro: %s\n" "$1" >&2
+    exit 1
+}
+
+validate_script() {
+    val_file="$1"
+    CC_EXEC=""
+    if command -v cc >/dev/null 2>&1; then
+        CC_EXEC="cc"
+    elif command -v gcc >/dev/null 2>&1; then
+        CC_EXEC="gcc"
+    fi
+
+    if [ -n "$CC_EXEC" ]; then
+        log "Validando '$val_file' com $CC_EXEC..."
+        if "$CC_EXEC" -fsyntax-only "$val_file" >/dev/null 2>&1; then
+            log "Validação concluída: Sintaxe de '$val_file' está correta."
+        else
+            log "Aviso: O arquivo '$val_file' contém erros de sintaxe C."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+CGen v$VERSION – Gerador de C Scripts
+
+Uso:
+  cgen <comando> [opções]
+
+Comandos:
+  init <arquivo.c>         Cria um novo arquivo C com layout base.
+  add <arquivo.c> <mod>    Adiciona um módulo funcional ao arquivo.
+  list                     Lista os módulos disponíveis.
+  help                     Mostra esta ajuda.
+
+Módulos disponíveis (baseados em shgen):
+  cleanup    Gestão de limpeza via atexit.
+  check_f    Função para validar existência de arquivos (access).
+  getopt     Esqueleto para parsing de argumentos (getopt.h).
+  root       Verificação de permissão de root (geteuid).
+  loop       Exemplo de iteração de diretório (dirent.h).
+
+Exemplo:
+  cgen init meu_projeto.c
+  cgen add meu_projeto.c getopt
+EOF
+}
+
+# --- Templates de Módulos C ---
+
+get_mod_base() {
+    cat <<EOF
+/*
+ * ==============================================================================
+ * Arquivo: $(basename "${file:-script.c}")
+ * Descrição: [Descreva a finalidade do script aqui]
+ * Gerado por: CGen (C Script Generator)
+ * Data: $(date '+%Y-%m-%d %H:%M')
+ * ==============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+
+/* --- Protótipos de Funções --- */
+void log_msg(const char *msg);
+
+/* --- Funções Auxiliares --- */
+
+void log_msg(const char *msg) {
+    printf("[%s] %s\n", "PROGNAME", msg);
+}
+
+/* --- Lógica Principal --- */
+
+int main(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    log_msg("Iniciando execução...");
+    
+    /* Adicione sua lógica aqui */
+
+    return 0;
+}
+EOF
+}
+
+get_mod_cleanup() {
+    cat <<EOF
+
+/* --- Módulo Cleanup --- */
+void cleanup(void) {
+    /* Lógica de limpeza aqui */
+    printf("Limpando recursos...\n");
+}
+/* No main: atexit(cleanup); */
+EOF
+}
+
+get_mod_check_f() {
+    cat <<EOF
+
+#include <unistd.h>
+/* --- Módulo Check File --- */
+int check_file(const char *path) {
+    return access(path, F_OK) == 0;
+}
+EOF
+}
+
+get_mod_getopt() {
+    cat <<EOF
+
+#include <getopt.h>
+/* --- Módulo Getopt --- */
+void parse_args(int argc, char *argv[]) {
+    int opt;
+    while ((opt = getopt(argc, argv, "hv")) != -1) {
+        switch (opt) {
+            case 'h': printf("Ajuda...\n"); exit(0);
+            case 'v': printf("Versão 1.0.0\n"); exit(0);
+            default: exit(1);
+        }
+    }
+}
+EOF
+}
+
+get_mod_root() {
+    cat <<EOF
+
+#include <unistd.h>
+#include <sys/types.h>
+/* --- Módulo Root Check --- */
+void check_root(void) {
+    if (geteuid() == 0) {
+        printf("Aviso: Rodando como root.\n");
+    }
+}
+EOF
+}
+
+get_mod_loop() {
+    cat <<EOF
+
+#include <dirent.h>
+/* --- Módulo Loop de Diretório --- */
+void list_dir(const char *path) {
+    struct dirent *de;
+    DIR *dr = opendir(path);
+    if (dr == NULL) return;
+    while ((de = readdir(dr)) != NULL) {
+        printf("%s\n", de->d_name);
+    }
+    closedir(dr);
+}
+EOF
+}
+
+# --- Lógica de Comandos ---
+
+cmd_init() {
+    [ $# -eq 1 ] || usage
+    file="$1"
+    [ -f "$file" ] && error "Arquivo '$file' já existe."
+    get_mod_base > "$file"
+    log "Arquivo '$file' inicializado com sucesso."
+    validate_script "$file"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || usage
+    file="$1"
+    mod="$2"
+    [ -f "$file" ] || error "Arquivo '$file' não encontrado. Use 'cgen init' primeiro."
+
+    case "$mod" in
+        cleanup) code=$(get_mod_cleanup) ; anchor="/* --- Funções Auxiliares --- */" ;;
+        check_f) code=$(get_mod_check_f) ; anchor="/* --- Funções Auxiliares --- */" ;;
+        getopt)  code=$(get_mod_getopt)  ; anchor="/* --- Funções Auxiliares --- */" ;;
+        root)    code=$(get_mod_root)    ; anchor="/* --- Funções Auxiliares --- */" ;;
+        loop)    code=$(get_mod_loop)    ; anchor="/* --- Funções Auxiliares --- */" ;;
+        *) error "Módulo '$mod' não reconhecido." ;;
+    esac
+
+    tmp_edit=$(mktemp)
+    trap 'rm -f "$tmp_edit"' EXIT
+    
+    inserted=false
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >> "$tmp_edit"
+        if [ "$line" = "$anchor" ] && [ "$inserted" = false ]; then
+            printf "%s\n" "$code" >> "$tmp_edit"
+            inserted=true
+        fi
+    done < "$file"
+    
+    mv "$tmp_edit" "$file"
+    trap - EXIT
+    log "Módulo '$mod' adicionado a '$file'."
+    validate_script "$file"
+}
+
+cmd_list() {
+    printf "Módulos disponíveis no CGen:\n"
+    printf "  - cleanup : Gestão de limpeza via atexit\n"
+    printf "  - check_f : Validação de arquivos (access)\n"
+    printf "  - getopt  : Parsing de argumentos (getopt.h)\n"
+    printf "  - root    : Verificação de root (geteuid)\n"
+    printf "  - loop    : Iteração de diretório (dirent.h)\n"
+}
+
+# --- Ponto de Entrada ---
+
+[ $# -lt 1 ] && { usage; exit 0; }
+
+command="$1"
+shift
+
+case "$command" in
+    init) cmd_init "$@" ;;
+    add)  cmd_add "$@" ;;
+    list) cmd_list ;;
+    help) usage ;;
+    *)    error "Comando desconhecido: $command" ;;
+esac
